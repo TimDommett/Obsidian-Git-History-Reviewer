@@ -328,6 +328,9 @@
 	color: var(--text-muted);
 	white-space: pre-wrap;
 	overflow-x: auto;
+	/* Keep a long message from dominating the now-fixed detail head. */
+	max-height: 160px;
+	overflow-y: auto;
 }
 
 .ghr-detail-meta {

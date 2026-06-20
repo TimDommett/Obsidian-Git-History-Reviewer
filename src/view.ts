@@ -193,7 +193,10 @@ export class GitHistoryView extends ItemView {
 		this.listEl = listWrap.createDiv({ cls: "ghr-list" });
 		this.sentinelEl = listWrap.createDiv({ cls: "ghr-sentinel" });
 
-		this.detailEl = body.createDiv({ cls: "ghr-detail" });
+		// "split" keeps the commit metadata head fixed and scrolls only the
+		// diff, so a file's header stays pinned at the top until you scroll past
+		// its file (rather than tucking behind the head).
+		this.detailEl = body.createDiv({ cls: "ghr-detail ghr-detail-split" });
 		this.renderDetailPlaceholder("Select a commit to review its changes.");
 
 		this.observer = new IntersectionObserver(
@@ -511,7 +514,8 @@ export class GitHistoryView extends ItemView {
 			});
 		}
 
-		const diffWrap = this.detailEl.createDiv({ cls: "ghr-diff-wrap" });
+		const scroll = this.detailEl.createDiv({ cls: "ghr-diff-scroll" });
+		const diffWrap = scroll.createDiv({ cls: "ghr-diff-wrap" });
 		this.diffWrapEl = diffWrap;
 		await this.renderDiffSection(diffWrap, commit);
 	}
