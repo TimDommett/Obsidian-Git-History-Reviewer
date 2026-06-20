@@ -324,7 +324,7 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(VIEW_TYPE_GIT_HISTORY);
 		if (existing.length > 0) {
-			workspace.revealLeaf(existing[0]);
+			await workspace.revealLeaf(existing[0]);
 			return;
 		}
 		const leaf = workspace.getLeaf("tab");
@@ -332,7 +332,7 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 			type: VIEW_TYPE_GIT_HISTORY,
 			active: true,
 		});
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	getViews(): GitHistoryView[] {
