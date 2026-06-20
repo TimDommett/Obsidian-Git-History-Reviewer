@@ -20,6 +20,39 @@ export interface GitRunResult {
 	stderr: string;
 }
 
+/** A pull request discovered locally via its GitHub `refs/pull/<n>/head` ref. */
+export interface PullRequestRef {
+	number: number;
+	/** Head commit SHA of the PR. */
+	head: string;
+	shortHead: string;
+	author: string;
+	dateISO: string;
+	subject: string;
+}
+
+/** Pure parser for the `for-each-ref` output used to list pull requests. */
+export function parsePullRefs(out: string): PullRequestRef[] {
+	const prs: PullRequestRef[] = [];
+	for (const line of out.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		const f = trimmed.split(FIELD_SEP);
+		if (f.length < 6) continue;
+		const m = f[0].match(/\/pr\/(\d+)$/);
+		if (!m) continue;
+		prs.push({
+			number: parseInt(m[1], 10),
+			head: f[1],
+			shortHead: f[2],
+			author: f[3],
+			dateISO: f[4],
+			subject: f[5],
+		});
+	}
+	return prs;
+}
+
 // Control characters used to delimit log fields. These never appear in commit
 // messages, so they are safe separators for parsing.
 const FIELD_SEP = "\x1f"; // unit separator – between fields
@@ -231,5 +264,112 @@ export class GitService {
 	/** Removes `relPath` from the index but leaves the working-tree file. */
 	async untrack(relPath: string): Promise<void> {
 		await this.run(["rm", "--cached", "--quiet", "--", relPath]);
+	}
+
+	// --------------------------------------------------------- pull requests
+
+	/** Name of the first configured remote (usually "origin"), or null. */
+	async firstRemote(): Promise<string | null> {
+		const res = await this.runRaw(["remote"]);
+		if (res.code !== 0) return null;
+		const first = res.stdout
+			.split("\n")
+			.map((s) => s.trim())
+			.filter(Boolean)[0];
+		return first ?? null;
+	}
+
+	/**
+	 * Fetches every PR's head commit from GitHub into
+	 * `refs/remotes/<remote>/pr/<number>`. Only works against GitHub remotes
+	 * (which expose the pull-request head refs).
+	 */
+	async fetchPullRefs(remote: string): Promise<void> {
+		await this.run([
+			"fetch",
+			"--prune",
+			remote,
+			`+refs/pull/*/head:refs/remotes/${remote}/pr/*`,
+		]);
+	}
+
+	/** True when `ancestor` is an ancestor of (already contained in) `ref`. */
+	async isAncestor(ancestor: string, ref: string): Promise<boolean> {
+		const res = await this.runRaw([
+			"merge-base",
+			"--is-ancestor",
+			ancestor,
+			ref,
+		]);
+		return res.code === 0;
+	}
+
+	/**
+	 * Lists locally-known PRs (from previously fetched pr refs) that are not yet
+	 * merged into `base`. Already-merged PRs are filtered out.
+	 */
+	async listOpenPulls(
+		base: string,
+		remote: string
+	): Promise<PullRequestRef[]> {
+		const fmt = [
+			"%(refname)",
+			"%(objectname)",
+			"%(objectname:short)",
+			"%(authorname)",
+			"%(authordate:iso-strict)",
+			"%(contents:subject)",
+		].join(FIELD_SEP);
+		const out = await this.run([
+			"for-each-ref",
+			`--format=${fmt}`,
+			`refs/remotes/${remote}/pr/*`,
+		]);
+		const all = parsePullRefs(out);
+		const open: PullRequestRef[] = [];
+		for (const pr of all) {
+			if (!(await this.isAncestor(pr.head, base))) open.push(pr);
+		}
+		open.sort((a, b) => b.number - a.number);
+		return open;
+	}
+
+	/** Diff of what a PR introduces relative to its merge-base with `base`. */
+	async getPullDiff(base: string, head: string): Promise<string> {
+		return this.run([
+			"diff",
+			"--no-color",
+			"-M",
+			"-C",
+			`${base}...${head}`,
+		]);
+	}
+
+	/** True when the working tree and index are clean. */
+	async isWorkingTreeClean(): Promise<boolean> {
+		const res = await this.runRaw(["status", "--porcelain"]);
+		return res.code === 0 && res.stdout.trim() === "";
+	}
+
+	/** Merges a PR's head into the current branch with a merge commit. Throws
+	 * (leaving the merge in progress) on conflict — call `abortMerge` then. */
+	async mergePull(number: number, head: string): Promise<void> {
+		await this.run([
+			"merge",
+			"--no-ff",
+			head,
+			"-m",
+			`Merge pull request #${number}`,
+		]);
+	}
+
+	/** Aborts an in-progress merge, restoring the pre-merge state. */
+	async abortMerge(): Promise<void> {
+		await this.runRaw(["merge", "--abort"]);
+	}
+
+	/** Pushes `branch` to `remote`. */
+	async push(remote: string, branch: string): Promise<void> {
+		await this.run(["push", remote, branch]);
 	}
 }

@@ -238,6 +238,26 @@
 	background: var(--background-primary);
 }
 
+/* Split detail: a fixed metadata head plus an inner scroll area for the diff,
+   so each file's header stays pinned at the top until you scroll past its file
+   (never tucking behind the head). Used by the pull-request view. */
+.ghr-detail.ghr-detail-split {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.ghr-detail-split .ghr-detail-head {
+	position: static;
+	flex: 0 0 auto;
+}
+
+.ghr-diff-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+}
+
 .ghr-detail-head {
 	padding: 16px 20px 12px;
 	border-bottom: 1px solid var(--background-modifier-border);
