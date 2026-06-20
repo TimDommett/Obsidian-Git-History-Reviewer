@@ -628,11 +628,39 @@ export class GitHistoryView extends ItemView {
 			await this.plugin.downgradeApprovalExcept(commit.hash, allKeys, key);
 		} else {
 			await this.plugin.setFileReviewed(commit.hash, key, reviewed);
+
+			// Once every file is individually ticked, optionally approve the
+			// whole commit (on by default).
+			if (
+				reviewed &&
+				this.plugin.settings.autoApproveAllFiles &&
+				!this.plugin.isApproved(commit.hash) &&
+				this.allReviewKeys.length > 0 &&
+				this.plugin.reviewedFileCount(
+					commit.hash,
+					this.allReviewKeys
+				) === this.allReviewKeys.length
+			) {
+				await this.plugin.setApproved(commit.hash, true);
+			}
 		}
 
 		const approvalChanged =
 			this.plugin.isApproved(commit.hash) !== wasApproved;
+
+		// If completing every file just auto-approved the open commit, advance
+		// to the next one — the same courtesy as approving from the list.
+		// Capture the neighbour before afterReviewStateChange re-filters the list.
+		const autoApproved =
+			approvalChanged && this.plugin.isApproved(commit.hash);
+		const nextHash =
+			autoApproved && this.selectedHash === commit.hash
+				? this.neighbourHash(commit.hash)
+				: null;
+
 		this.afterReviewStateChange(commit, approvalChanged);
+
+		if (nextHash) await this.select(nextHash, true);
 	}
 
 	/** Repaints every file circle in the detail pane from current state. */

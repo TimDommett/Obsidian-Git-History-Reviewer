@@ -30,6 +30,8 @@ interface GitHistoryReviewerSettings {
 	maxCommits: number;
 	gitPath: string;
 	autoManageGitignore: boolean;
+	/** Auto-mark a commit "approved" once every one of its files is ticked. */
+	autoApproveAllFiles: boolean;
 }
 
 interface PluginData {
@@ -43,6 +45,7 @@ const DEFAULT_SETTINGS: GitHistoryReviewerSettings = {
 	maxCommits: 0,
 	gitPath: "git",
 	autoManageGitignore: true,
+	autoApproveAllFiles: true,
 };
 
 const GITIGNORE_BANNER =
@@ -361,6 +364,20 @@ class GitHistoryReviewerSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.defaultFilter =
 							value as HistoryFilter;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Auto-approve when all files are reviewed")
+			.setDesc(
+				"When every file in a commit's diff is individually ticked off, automatically mark the whole commit reviewed & approved."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.autoApproveAllFiles)
+					.onChange(async (value) => {
+						this.plugin.settings.autoApproveAllFiles = value;
 						await this.plugin.saveSettings();
 					})
 			);
