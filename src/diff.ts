@@ -1,0 +1,404 @@
+import { setIcon } from "obsidian";
+
+export type DiffLineType = "add" | "del" | "context" | "meta";
+
+export interface DiffLine {
+	type: DiffLineType;
+	oldNum: number | null;
+	newNum: number | null;
+	text: string;
+	/** Leading change indicator(s), e.g. "+", "-", " ", "++". */
+	sign: string;
+}
+
+export interface DiffHunk {
+	header: string;
+	lines: DiffLine[];
+	combined: boolean;
+}
+
+export type FileStatus =
+	| "added"
+	| "deleted"
+	| "modified"
+	| "renamed"
+	| "copied"
+	| "binary";
+
+export interface DiffFile {
+	oldPath: string;
+	newPath: string;
+	status: FileStatus;
+	hunks: DiffHunk[];
+	isBinary: boolean;
+	additions: number;
+	deletions: number;
+}
+
+function stripPrefix(path: string): string {
+	if (path === "/dev/null") return path;
+	return path.replace(/^[ab]\//, "");
+}
+
+function unquote(path: string): string {
+	// git quotes paths with special characters in double quotes.
+	if (path.startsWith('"') && path.endsWith('"')) {
+		try {
+			return JSON.parse(path);
+		} catch {
+			return path.slice(1, -1);
+		}
+	}
+	return path;
+}
+
+/**
+ * Parses unified (and combined, for merges) diff text into structured files.
+ * Written to be forgiving: anything it doesn't recognise becomes a meta line
+ * rather than throwing.
+ */
+export function parseDiff(text: string): DiffFile[] {
+	const files: DiffFile[] = [];
+	const lines = text.split("\n");
+
+	let file: DiffFile | null = null;
+	let hunk: DiffHunk | null = null;
+	let oldNum = 0;
+	let newNum = 0;
+	let prefixCols = 1;
+
+	const pushFile = () => {
+		if (file) files.push(file);
+	};
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+
+		if (line.startsWith("diff --git") || line.startsWith("diff --cc") || line.startsWith("diff --combined")) {
+			pushFile();
+			hunk = null;
+			file = {
+				oldPath: "",
+				newPath: "",
+				status: "modified",
+				hunks: [],
+				isBinary: false,
+				additions: 0,
+				deletions: 0,
+			};
+			// Best-effort path parse from the header; refined by --- / +++ lines.
+			const m = line.match(/ a\/(.+?) b\/(.+)$/);
+			if (m) {
+				file.oldPath = unquote(m[1]);
+				file.newPath = unquote(m[2]);
+			} else {
+				const cc = line.match(/^diff --(?:cc|combined) (.+)$/);
+				if (cc) {
+					file.oldPath = file.newPath = unquote(cc[1]);
+				}
+			}
+			continue;
+		}
+
+		if (!file) {
+			// Text before the first "diff --git" header (e.g. blank lines).
+			continue;
+		}
+
+		// File-level metadata lines.
+		if (line.startsWith("new file mode")) {
+			file.status = "added";
+			continue;
+		}
+		if (line.startsWith("deleted file mode")) {
+			file.status = "deleted";
+			continue;
+		}
+		if (line.startsWith("rename from") || line.startsWith("rename to")) {
+			file.status = "renamed";
+			continue;
+		}
+		if (line.startsWith("copy from") || line.startsWith("copy to")) {
+			file.status = "copied";
+			continue;
+		}
+		if (
+			line.startsWith("Binary files") ||
+			line.startsWith("GIT binary patch")
+		) {
+			file.isBinary = true;
+			file.status = file.status === "modified" ? "binary" : file.status;
+			continue;
+		}
+		if (line.startsWith("--- ")) {
+			const p = line.slice(4).trim();
+			file.oldPath = unquote(stripPrefix(p));
+			continue;
+		}
+		if (line.startsWith("+++ ")) {
+			const p = line.slice(4).trim();
+			file.newPath = unquote(stripPrefix(p));
+			continue;
+		}
+		if (
+			line.startsWith("index ") ||
+			line.startsWith("old mode") ||
+			line.startsWith("new mode") ||
+			line.startsWith("similarity index") ||
+			line.startsWith("dissimilarity index")
+		) {
+			continue;
+		}
+
+		// Hunk header, e.g. "@@ -1,4 +1,6 @@ context" or combined "@@@ ... @@@".
+		const atMatch = line.match(/^(@+)/);
+		if (atMatch) {
+			const atCount = atMatch[1].length;
+			prefixCols = Math.max(1, atCount - 1);
+			const combined = atCount > 2;
+
+			// The last "+start" range is the new-file range; first "-start" the old.
+			const ranges = [...line.matchAll(/[-+](\d+)(?:,\d+)?/g)];
+			const minus = ranges.filter((r) => r[0][0] === "-");
+			const plus = ranges.filter((r) => r[0][0] === "+");
+			oldNum = minus.length ? parseInt(minus[0][1], 10) : 0;
+			newNum = plus.length ? parseInt(plus[plus.length - 1][1], 10) : 0;
+
+			hunk = { header: line, lines: [], combined };
+			file.hunks.push(hunk);
+			continue;
+		}
+
+		if (!hunk) {
+			// Unrecognised line outside a hunk – ignore.
+			continue;
+		}
+
+		// A zero-length line only ever appears as the trailing artifact of
+		// splitting the patch on "\n"; real diff content lines always carry a
+		// prefix character (space / + / -), so an empty line is never content.
+		if (line.length === 0) {
+			continue;
+		}
+
+		// "\ No newline at end of file"
+		if (line.startsWith("\\")) {
+			hunk.lines.push({
+				type: "meta",
+				oldNum: null,
+				newNum: null,
+				text: line.slice(2),
+				sign: "",
+			});
+			continue;
+		}
+
+		const sign = line.slice(0, prefixCols);
+		const content = line.slice(prefixCols);
+		const isAdd = sign.includes("+");
+		const isDel = sign.includes("-");
+
+		if (isAdd && !isDel) {
+			hunk.lines.push({
+				type: "add",
+				oldNum: null,
+				newNum: newNum++,
+				text: content,
+				sign,
+			});
+			file.additions++;
+		} else if (isDel && !isAdd) {
+			hunk.lines.push({
+				type: "del",
+				oldNum: oldNum++,
+				newNum: null,
+				text: content,
+				sign,
+			});
+			file.deletions++;
+		} else {
+			// Context (or, rarely in combined diffs, mixed) line.
+			hunk.lines.push({
+				type: "context",
+				oldNum: oldNum++,
+				newNum: newNum++,
+				text: content,
+				sign,
+			});
+		}
+	}
+
+	pushFile();
+	return files;
+}
+
+const STATUS_LABEL: Record<FileStatus, string> = {
+	added: "added",
+	deleted: "deleted",
+	modified: "modified",
+	renamed: "renamed",
+	copied: "copied",
+	binary: "binary",
+};
+
+/** Lines beyond which a file's body is collapsed by default. */
+const LARGE_FILE_LINES = 600;
+
+export interface RenderDiffOptions {
+	/** Called the first time a file body is rendered (for perf accounting). */
+	onRenderFile?: (file: DiffFile) => void;
+}
+
+/**
+ * Renders parsed diff files into `container` using Obsidian DOM helpers.
+ * Large files render their bodies lazily on first expand.
+ */
+export function renderDiff(
+	container: HTMLElement,
+	files: DiffFile[],
+	_options: RenderDiffOptions = {}
+): void {
+	container.empty();
+
+	if (files.length === 0) {
+		container.createDiv({
+			cls: "ghr-empty",
+			text: "No file changes in this commit.",
+		});
+		return;
+	}
+
+	for (const file of files) {
+		const fileEl = container.createDiv({ cls: "ghr-file" });
+
+		const header = fileEl.createDiv({ cls: "ghr-file-header" });
+		const caret = header.createSpan({ cls: "ghr-caret" });
+		setIcon(caret, "chevron-down");
+
+		const status = header.createSpan({
+			cls: `ghr-status ghr-status-${file.status}`,
+			text: STATUS_LABEL[file.status],
+		});
+		status.setAttr("aria-label", `File ${STATUS_LABEL[file.status]}`);
+
+		const nameEl = header.createSpan({ cls: "ghr-file-name" });
+		if (file.status === "renamed" || file.status === "copied") {
+			nameEl.setText(`${file.oldPath} → ${file.newPath}`);
+		} else {
+			nameEl.setText(file.newPath || file.oldPath);
+		}
+
+		const stat = header.createSpan({ cls: "ghr-file-stat" });
+		if (file.additions > 0) {
+			stat.createSpan({
+				cls: "ghr-stat-add",
+				text: `+${file.additions}`,
+			});
+		}
+		if (file.deletions > 0) {
+			stat.createSpan({
+				cls: "ghr-stat-del",
+				text: `−${file.deletions}`,
+			});
+		}
+
+		const body = fileEl.createDiv({ cls: "ghr-file-body" });
+
+		if (file.isBinary && file.hunks.length === 0) {
+			body.createDiv({
+				cls: "ghr-binary",
+				text: "Binary file — no text diff available.",
+			});
+			wireCollapse(header, caret, fileEl);
+			continue;
+		}
+
+		if (file.hunks.length === 0) {
+			body.createDiv({
+				cls: "ghr-binary",
+				text:
+					file.status === "renamed" || file.status === "copied"
+						? "Renamed/copied with no content changes."
+						: "No content changes.",
+			});
+			wireCollapse(header, caret, fileEl);
+			continue;
+		}
+
+		const totalLines = file.hunks.reduce(
+			(n, h) => n + h.lines.length,
+			0
+		);
+		const collapsedByDefault = totalLines > LARGE_FILE_LINES;
+
+		let rendered = false;
+		const renderBody = () => {
+			if (rendered) return;
+			rendered = true;
+			renderFileBody(body, file);
+		};
+
+		if (collapsedByDefault) {
+			fileEl.addClass("ghr-collapsed");
+			body.createDiv({
+				cls: "ghr-large-hint",
+				text: `Large change (${totalLines} lines). Click the header to expand.`,
+			});
+		} else {
+			renderBody();
+		}
+
+		wireCollapse(header, caret, fileEl, renderBody);
+	}
+}
+
+function wireCollapse(
+	header: HTMLElement,
+	caret: HTMLElement,
+	fileEl: HTMLElement,
+	onExpand?: () => void
+): void {
+	header.addEventListener("click", () => {
+		const collapsed = fileEl.hasClass("ghr-collapsed");
+		if (collapsed) {
+			fileEl.removeClass("ghr-collapsed");
+			setIcon(caret, "chevron-down");
+			onExpand?.();
+		} else {
+			fileEl.addClass("ghr-collapsed");
+			setIcon(caret, "chevron-right");
+		}
+	});
+}
+
+function renderFileBody(body: HTMLElement, file: DiffFile): void {
+	body.empty();
+	const table = body.createDiv({ cls: "ghr-diff-table" });
+
+	for (const hunk of file.hunks) {
+		const hunkRow = table.createDiv({ cls: "ghr-line ghr-hunk" });
+		hunkRow.createDiv({ cls: "ghr-gutter ghr-gutter-old" });
+		hunkRow.createDiv({ cls: "ghr-gutter ghr-gutter-new" });
+		hunkRow.createDiv({ cls: "ghr-code", text: hunk.header });
+
+		for (const dl of hunk.lines) {
+			const row = table.createDiv({
+				cls: `ghr-line ghr-line-${dl.type}`,
+			});
+			row.createDiv({
+				cls: "ghr-gutter ghr-gutter-old",
+				text: dl.oldNum != null ? String(dl.oldNum) : "",
+			});
+			row.createDiv({
+				cls: "ghr-gutter ghr-gutter-new",
+				text: dl.newNum != null ? String(dl.newNum) : "",
+			});
+			const code = row.createDiv({ cls: "ghr-code" });
+			const signChar =
+				dl.type === "add" ? "+" : dl.type === "del" ? "-" : " ";
+			code.createSpan({ cls: "ghr-sign", text: signChar });
+			// Empty string still needs a node so the row keeps its height.
+			code.createSpan({ cls: "ghr-text", text: dl.text });
+		}
+	}
+}

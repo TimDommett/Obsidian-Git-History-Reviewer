@@ -1,0 +1,28 @@
+{
+	"name": "obsidian-git-history-reviewer",
+	"version": "1.0.0",
+	"description": "Review every commit in your Obsidian vault's git history with a dark-mode diff view and track which commits you've approved.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+	},
+	"keywords": [
+		"obsidian",
+		"plugin",
+		"git",
+		"diff",
+		"history",
+		"review"
+	],
+	"author": "Tim Dommett",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.11.0",
+		"builtin-modules": "^3.3.0",
+		"esbuild": "^0.20.2",
+		"obsidian": "latest",
+		"tslib": "^2.6.2",
+		"typescript": "^5.4.0"
+	}
+}
