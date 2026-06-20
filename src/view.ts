@@ -1,7 +1,14 @@
-import { ItemView, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { App, ItemView, Modal, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import type GitHistoryReviewerPlugin from "./main";
 import { CommitMeta, GitError } from "./git";
-import { DiffFile, parseDiff, renderDiff } from "./diff";
+import {
+	DiffFile,
+	FileReviewHooks,
+	fileReviewKey,
+	paintFileCheck,
+	parseDiff,
+	renderDiff,
+} from "./diff";
 
 export const VIEW_TYPE_GIT_HISTORY = "git-history-reviewer-view";
 
@@ -59,6 +66,9 @@ export class GitHistoryView extends ItemView {
 	private rowByHash = new Map<string, HTMLElement>();
 	private observer: IntersectionObserver | null = null;
 
+	/** Files currently shown for the selected commit (drives per-file progress). */
+	private activeFiles: DiffFile[] = [];
+
 	// Element references.
 	private listWrapEl!: HTMLElement;
 	private listEl!: HTMLElement;
@@ -68,6 +78,10 @@ export class GitHistoryView extends ItemView {
 	private ignorePillEl!: HTMLElement;
 	private searchInputEl!: HTMLInputElement;
 	private filterSelectEl!: HTMLSelectElement;
+	// Detail-pane controls that need live updates as review state changes.
+	private approveCheckEl: HTMLInputElement | null = null;
+	private approveStatusEl: HTMLElement | null = null;
+	private progressEl: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: GitHistoryReviewerPlugin) {
 		super(leaf);
@@ -139,6 +153,15 @@ export class GitHistoryView extends ItemView {
 			this.filter = this.filterSelectEl.value as HistoryFilter;
 			this.applyFilter();
 		});
+
+		const approveBefore = controls.createEl("button", {
+			cls: "ghr-icon-btn",
+			attr: { "aria-label": "Approve all commits up to a date…" },
+		});
+		setIcon(approveBefore, "calendar-check");
+		approveBefore.addEventListener("click", () =>
+			this.openApproveBeforeDate()
+		);
 
 		const refresh = controls.createEl("button", {
 			cls: "ghr-icon-btn",
@@ -293,7 +316,8 @@ export class GitHistoryView extends ItemView {
 		check.checked = approved;
 		check.addEventListener("click", (e) => e.stopPropagation());
 		check.addEventListener("change", () => {
-			void this.toggleApprove(c, check.checked);
+			// Approving from the list advances the detail pane to the next commit.
+			void this.toggleApprove(c, check.checked, true);
 		});
 
 		const main = row.createDiv({ cls: "ghr-row-main" });
@@ -324,12 +348,14 @@ export class GitHistoryView extends ItemView {
 
 	// ----------------------------------------------------------------- detail
 
-	private async select(hash: string): Promise<void> {
+	private async select(hash: string, scrollIntoView = false): Promise<void> {
 		if (this.selectedHash) {
 			this.rowByHash.get(this.selectedHash)?.removeClass("ghr-selected");
 		}
 		this.selectedHash = hash;
-		this.rowByHash.get(hash)?.addClass("ghr-selected");
+		const row = this.rowByHash.get(hash);
+		row?.addClass("ghr-selected");
+		if (scrollIntoView) row?.scrollIntoView({ block: "nearest" });
 
 		const commit = this.commits.find((c) => c.hash === hash);
 		if (!commit) return;
@@ -343,6 +369,8 @@ export class GitHistoryView extends ItemView {
 
 	private async renderDetail(commit: CommitMeta): Promise<void> {
 		this.detailEl.empty();
+		// Reset per-commit state; the diff load below repopulates it.
+		this.activeFiles = [];
 
 		const head = this.detailEl.createDiv({ cls: "ghr-detail-head" });
 
@@ -358,14 +386,14 @@ export class GitHistoryView extends ItemView {
 			void this.toggleApprove(commit, approveCheck.checked);
 		});
 		approveWrap.createSpan({ text: "Reviewed & approved" });
+		this.approveCheckEl = approveCheck;
 
-		const review = this.plugin.getReview(commit.hash);
-		if (review?.approved && review.reviewedAt) {
-			topRow.createSpan({
-				cls: "ghr-reviewed-at",
-				text: `approved ${relativeTime(review.reviewedAt)}`,
-			}).setAttr("aria-label", absoluteTime(review.reviewedAt));
-		}
+		// Live per-file review progress (e.g. "2 / 5 files reviewed").
+		this.progressEl = topRow.createSpan({ cls: "ghr-progress" });
+
+		// Holder for the "approved … ago" stamp, kept in sync as state changes.
+		this.approveStatusEl = topRow.createSpan({ cls: "ghr-reviewed-at" });
+		this.syncApproveStatus(commit);
 
 		head.createDiv({
 			cls: "ghr-detail-subject",
@@ -443,71 +471,231 @@ export class GitHistoryView extends ItemView {
 		if (this.selectedHash !== commit.hash) return;
 		diffWrap.empty();
 
+		const hooks = this.fileReviewHooks(commit);
 		const diffTarget = diffWrap.createDiv();
 
-		if (commit.isMerge) {
-			this.renderMergeBar(diffWrap, diffTarget, commit, files);
+		if (!commit.isMerge) {
+			this.activeFiles = files;
+			renderDiff(diffTarget, files, { fileReview: hooks });
+			this.updateProgress(commit);
+			return;
 		}
 
-		if (!(commit.isMerge && files.length === 0)) {
-			renderDiff(diffTarget, files);
+		// Merge commit. Its combined diff only contains conflict resolutions
+		// (nothing for a clean merge), which is rarely what you want to review,
+		// so we default to the full set of changes the merge introduced
+		// relative to its first parent — auto-expanded.
+		let fpFiles: DiffFile[] | null = null;
+		try {
+			fpFiles = await this.getFirstParentDiff(commit);
+		} catch {
+			fpFiles = null; // fall back to the combined diff below
+		}
+		if (this.selectedHash !== commit.hash) return;
+
+		const bar = diffWrap.createDiv({ cls: "ghr-merge-actions" });
+		diffWrap.insertBefore(bar, diffTarget);
+		const note = bar.createSpan({ cls: "ghr-merge-note" });
+		const btn = bar.createEl("button", { cls: "ghr-merge-btn" });
+
+		let showingFull = fpFiles != null;
+
+		const renderView = () => {
+			diffTarget.empty();
+			if (showingFull && fpFiles) {
+				this.activeFiles = fpFiles;
+				note.setText(
+					"Showing every change this merge introduced (vs its first parent)."
+				);
+				btn.setText("Show merge's own changes");
+				renderDiff(diffTarget, fpFiles, { fileReview: hooks });
+			} else {
+				this.activeFiles = files;
+				note.setText(
+					files.length === 0
+						? "Clean merge — it has no conflict-resolution changes of its own."
+						: "Showing this merge's own changes (conflict resolutions)."
+				);
+				btn.setText(
+					fpFiles
+						? "View full changes vs first parent"
+						: "Full changes unavailable"
+				);
+				if (files.length > 0) {
+					renderDiff(diffTarget, files, { fileReview: hooks });
+				} else {
+					diffTarget.createDiv({
+						cls: "ghr-empty",
+						text: "No changes in this merge's combined diff.",
+					});
+				}
+			}
+			this.updateProgress(commit);
+		};
+
+		if (!fpFiles) btn.disabled = true;
+		btn.addEventListener("click", () => {
+			if (!fpFiles) return;
+			showingFull = !showingFull;
+			renderView();
+		});
+		renderView();
+	}
+
+	// ---------------------------------------------------------- per-file review
+
+	private fileReviewHooks(commit: CommitMeta): FileReviewHooks {
+		return {
+			isReviewed: (file) =>
+				this.plugin.isFileReviewed(commit.hash, fileReviewKey(file)),
+			onToggle: (file, reviewed) =>
+				void this.onFileToggle(commit, file, reviewed),
+		};
+	}
+
+	private async onFileToggle(
+		commit: CommitMeta,
+		file: DiffFile,
+		reviewed: boolean
+	): Promise<void> {
+		const key = fileReviewKey(file);
+		const wasApproved = this.plugin.isApproved(commit.hash);
+
+		if (!reviewed && wasApproved) {
+			// Un-ticking one file on an approved commit downgrades it to a
+			// partial review: every other file stays reviewed, approval drops.
+			const allKeys = this.activeFiles.map(fileReviewKey);
+			await this.plugin.downgradeApprovalExcept(commit.hash, allKeys, key);
+		} else {
+			await this.plugin.setFileReviewed(commit.hash, key, reviewed);
+		}
+
+		const approvalChanged =
+			this.plugin.isApproved(commit.hash) !== wasApproved;
+		this.afterReviewStateChange(commit, approvalChanged);
+	}
+
+	/** Repaints every file circle in the detail pane from current state. */
+	private syncFileChecks(commit: CommitMeta): void {
+		const checks =
+			this.detailEl.querySelectorAll<HTMLElement>(".ghr-file-check");
+		checks.forEach((check) => {
+			const key = check.dataset.ghrKey ?? "";
+			paintFileCheck(
+				check,
+				this.plugin.isFileReviewed(commit.hash, key)
+			);
+		});
+	}
+
+	private updateProgress(commit: CommitMeta): void {
+		if (!this.progressEl) return;
+		const keys = this.activeFiles.map(fileReviewKey);
+		const total = keys.length;
+		this.progressEl.empty();
+		this.progressEl.removeClass("ghr-progress-ready", "ghr-progress-done");
+		if (total === 0) return;
+
+		const done = this.plugin.reviewedFileCount(commit.hash, keys);
+		this.progressEl.createSpan({
+			text: `${done} / ${total} files reviewed`,
+		});
+
+		if (done === total) {
+			if (this.plugin.isApproved(commit.hash)) {
+				this.progressEl.addClass("ghr-progress-done");
+			} else {
+				this.progressEl.addClass("ghr-progress-ready");
+				this.progressEl.createSpan({
+					cls: "ghr-progress-hint",
+					text: " — ready to approve",
+				});
+			}
 		}
 	}
 
-	/**
-	 * For merge commits, git's default combined diff only shows conflict
-	 * resolutions (nothing for a clean merge). Offer a toggle to view the full
-	 * set of changes the merge brought in relative to its first parent.
-	 */
-	private renderMergeBar(
-		diffWrap: HTMLElement,
-		diffTarget: HTMLElement,
+	/** Rebuilds the "approved … ago" stamp from current state. */
+	private syncApproveStatus(commit: CommitMeta): void {
+		if (!this.approveStatusEl) return;
+		this.approveStatusEl.empty();
+		const review = this.plugin.getReview(commit.hash);
+		if (review?.approved && review.reviewedAt) {
+			this.approveStatusEl.setText(
+				`approved ${relativeTime(review.reviewedAt)}`
+			);
+			this.approveStatusEl.setAttr(
+				"aria-label",
+				absoluteTime(review.reviewedAt)
+			);
+		} else {
+			this.approveStatusEl.removeAttribute("aria-label");
+		}
+	}
+
+	/** Reflects the latest review state across the detail pane and list row. */
+	private afterReviewStateChange(
 		commit: CommitMeta,
-		combinedFiles: DiffFile[]
+		approvalChanged: boolean
 	): void {
-		const bar = diffWrap.createDiv({ cls: "ghr-merge-actions" });
-		diffWrap.insertBefore(bar, diffTarget);
+		this.syncFileChecks(commit);
+		this.updateProgress(commit);
+		this.syncApproveStatus(commit);
+		if (this.approveCheckEl) {
+			this.approveCheckEl.checked = this.plugin.isApproved(commit.hash);
+		}
+		if (approvalChanged && this.filter !== "all") {
+			this.applyFilter();
+		} else {
+			this.updateRow(commit.hash);
+			this.updateCounts();
+		}
+	}
 
-		bar.createSpan({
-			cls: "ghr-merge-note",
-			text:
-				combinedFiles.length === 0
-					? "Clean merge — it introduced no changes of its own. The merged content lives in the individual commits."
-					: "Showing this merge's own changes (conflict resolutions).",
-		});
+	private updateRow(hash: string): void {
+		const row = this.rowByHash.get(hash);
+		if (!row) return;
+		const approved = this.plugin.isApproved(hash);
+		row.toggleClass("ghr-approved", approved);
+		const check = row.querySelector<HTMLInputElement>(".ghr-row-check");
+		if (check) check.checked = approved;
+	}
 
-		const btn = bar.createEl("button", {
-			cls: "ghr-merge-btn",
-			text: "View full changes vs first parent",
-		});
-		let showingFirstParent = false;
+	// --------------------------------------------------- approve up to a date
 
-		btn.addEventListener("click", async () => {
-			showingFirstParent = !showingFirstParent;
-			if (!showingFirstParent) {
-				btn.setText("View full changes vs first parent");
-				diffTarget.empty();
-				if (combinedFiles.length > 0) renderDiff(diffTarget, combinedFiles);
-				return;
+	private openApproveBeforeDate(): void {
+		if (this.commits.length === 0) {
+			new Notice("No commits loaded yet.");
+			return;
+		}
+		new ApproveBeforeDateModal(
+			this.app,
+			this.commits,
+			async (hashes) => {
+				const n = await this.plugin.approveMany(hashes);
+				new Notice(
+					n === 0
+						? "Those commits were already approved."
+						: `Approved ${n} commit${n === 1 ? "" : "s"}.`
+				);
+				this.applyFilter();
+				const selected = this.selectedHash
+					? this.commits.find((c) => c.hash === this.selectedHash)
+					: undefined;
+				if (selected) {
+					if (this.approveCheckEl) {
+						this.approveCheckEl.checked = this.plugin.isApproved(
+							selected.hash
+						);
+					}
+					this.syncFileChecks(selected);
+					this.syncApproveStatus(selected);
+					this.updateProgress(selected);
+				}
+				for (const v of this.plugin.getViews()) {
+					if (v !== this) v.refreshApprovals();
+				}
 			}
-			btn.setText("Show merge's own changes");
-			diffTarget.empty();
-			diffTarget.createDiv({ cls: "ghr-loading", text: "Loading…" });
-			try {
-				const fpFiles = await this.getFirstParentDiff(commit);
-				if (this.selectedHash !== commit.hash) return;
-				renderDiff(diffTarget, fpFiles);
-			} catch (err) {
-				if (this.selectedHash !== commit.hash) return;
-				const message =
-					err instanceof GitError ? err.message : String(err);
-				diffTarget.empty();
-				diffTarget.createDiv({
-					cls: "ghr-error",
-					text: `Could not load diff:\n${message}`,
-				});
-			}
-		});
+		).open();
 	}
 
 	private async getDiff(hash: string): Promise<DiffFile[]> {
@@ -536,15 +724,25 @@ export class GitHistoryView extends ItemView {
 
 	private async toggleApprove(
 		commit: CommitMeta,
-		approved: boolean
+		approved: boolean,
+		advanceAfter = false
 	): Promise<void> {
+		// Only advance when approving the commit that's currently open on the
+		// right. Capture the neighbour before the list is re-filtered.
+		const advance =
+			advanceAfter && approved && this.selectedHash === commit.hash;
+		const nextHash = advance ? this.neighbourHash(commit.hash) : null;
+
 		await this.plugin.setApproved(commit.hash, approved);
 
-		const row = this.rowByHash.get(commit.hash);
-		if (row) {
-			row.toggleClass("ghr-approved", approved);
-			const check = row.querySelector<HTMLInputElement>(".ghr-row-check");
-			if (check) check.checked = approved;
+		this.updateRow(commit.hash);
+
+		// Keep the open detail pane consistent (unless we're about to move off it).
+		if (this.selectedHash === commit.hash && !advance) {
+			if (this.approveCheckEl) this.approveCheckEl.checked = approved;
+			this.syncFileChecks(commit);
+			this.updateProgress(commit);
+			this.syncApproveStatus(commit);
 		}
 
 		// If the active filter would hide/show this commit, rebuild the list
@@ -555,14 +753,20 @@ export class GitHistoryView extends ItemView {
 			this.updateCounts();
 		}
 
-		// Keep the detail checkbox in sync when toggled from the list.
-		if (this.selectedHash === commit.hash) {
-			const detailCheck =
-				this.detailEl.querySelector<HTMLInputElement>(
-					".ghr-approve input"
-				);
-			if (detailCheck) detailCheck.checked = approved;
+		if (advance && nextHash) {
+			await this.select(nextHash, true);
 		}
+	}
+
+	/**
+	 * The commit to jump to after the current one is approved from the list:
+	 * the next one in the visible order, or the previous if it was last.
+	 */
+	private neighbourHash(hash: string): string | null {
+		const idx = this.filtered.findIndex((c) => c.hash === hash);
+		if (idx === -1) return null;
+		const next = this.filtered[idx + 1] ?? this.filtered[idx - 1];
+		return next ? next.hash : null;
 	}
 
 	// ------------------------------------------------------------------ counts
@@ -646,6 +850,117 @@ export class GitHistoryView extends ItemView {
 			const check = row.querySelector<HTMLInputElement>(".ghr-row-check");
 			if (check) check.checked = approved;
 		}
+		// Keep an open detail pane in step with the refreshed state.
+		if (this.selectedHash) {
+			const commit = this.commits.find(
+				(c) => c.hash === this.selectedHash
+			);
+			if (commit) {
+				if (this.approveCheckEl) {
+					this.approveCheckEl.checked = this.plugin.isApproved(
+						commit.hash
+					);
+				}
+				this.syncFileChecks(commit);
+				this.syncApproveStatus(commit);
+				this.updateProgress(commit);
+			}
+		}
 		this.updateCounts();
+	}
+}
+
+/** Modal that bulk-approves every commit dated on or before a chosen date. */
+class ApproveBeforeDateModal extends Modal {
+	constructor(
+		app: App,
+		private commits: CommitMeta[],
+		private onConfirm: (hashes: string[]) => void | Promise<void>
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl, titleEl } = this;
+		titleEl.setText("Approve commits up to a date");
+		contentEl.addClass("ghr-date-modal");
+
+		contentEl.createEl("p", {
+			cls: "ghr-date-intro",
+			text:
+				"Mark every commit dated on or before the chosen date as reviewed & approved. Commits that are already approved are left untouched.",
+		});
+
+		const controls = contentEl.createDiv({ cls: "ghr-date-controls" });
+		controls.createEl("label", {
+			text: "On or before",
+			attr: { for: "ghr-date-input" },
+		});
+		const input = controls.createEl("input", {
+			attr: { type: "date", id: "ghr-date-input" },
+		}) as HTMLInputElement;
+		input.value = this.defaultDate();
+
+		const count = contentEl.createDiv({ cls: "ghr-date-count" });
+
+		const buttons = contentEl.createDiv({ cls: "ghr-date-buttons" });
+		const cancel = buttons.createEl("button", { text: "Cancel" });
+		const confirm = buttons.createEl("button", {
+			cls: "mod-cta",
+			text: "Approve",
+		});
+
+		const eligible = (): string[] => {
+			const cutoff = this.cutoffMs(input.value);
+			if (cutoff == null) return [];
+			return this.commits
+				.filter((c) => {
+					const t = new Date(c.dateISO).getTime();
+					return !Number.isNaN(t) && t <= cutoff;
+				})
+				.map((c) => c.hash);
+		};
+
+		const refresh = () => {
+			const n = eligible().length;
+			count.setText(
+				input.value
+					? `${n} commit${n === 1 ? "" : "s"} dated on or before ${input.value}.`
+					: "Pick a date."
+			);
+			confirm.disabled = n === 0;
+		};
+
+		input.addEventListener("input", refresh);
+		refresh();
+
+		cancel.addEventListener("click", () => this.close());
+		confirm.addEventListener("click", () => {
+			const hashes = eligible();
+			this.close();
+			void this.onConfirm(hashes);
+		});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+
+	/** Default to the newest commit's date so "approve everything" is one click. */
+	private defaultDate(): string {
+		const newest = this.commits[0];
+		const d = newest ? new Date(newest.dateISO) : new Date();
+		const valid = Number.isNaN(d.getTime()) ? new Date() : d;
+		const y = valid.getFullYear();
+		const m = String(valid.getMonth() + 1).padStart(2, "0");
+		const day = String(valid.getDate()).padStart(2, "0");
+		return `${y}-${m}-${day}`;
+	}
+
+	/** Inclusive end-of-day (local) for the selected date, in epoch ms. */
+	private cutoffMs(value: string): number | null {
+		if (!value) return null;
+		const t = new Date(`${value}T23:59:59.999`).getTime();
+		return Number.isNaN(t) ? null : t;
 	}
 }

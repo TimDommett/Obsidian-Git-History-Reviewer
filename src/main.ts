@@ -16,6 +16,13 @@ import {
 export interface ReviewRecord {
 	approved: boolean;
 	reviewedAt: string | null;
+	/**
+	 * Per-file review state, keyed by the file's path within the commit. The
+	 * value is the ISO timestamp the file was ticked. Only present while a
+	 * commit is partially reviewed — approving the whole commit clears it
+	 * (approval implies every file is reviewed) to keep data.json lean.
+	 */
+	files?: Record<string, string>;
 }
 
 interface GitHistoryReviewerSettings {
@@ -125,14 +132,114 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 
 	async setApproved(hash: string, approved: boolean): Promise<void> {
 		if (approved) {
+			// Approving the whole commit supersedes any per-file ticks, so we
+			// drop the file map entirely (every file is reviewed by definition).
 			this.reviews[hash] = {
 				approved: true,
 				reviewedAt: new Date().toISOString(),
 			};
-		} else if (this.reviews[hash]) {
-			delete this.reviews[hash];
+		} else {
+			const rec = this.reviews[hash];
+			if (rec) {
+				rec.approved = false;
+				rec.reviewedAt = null;
+				this.pruneIfEmpty(hash);
+			}
 		}
 		this.queueSave();
+	}
+
+	/** True when `path` within `commit` counts as reviewed. */
+	isFileReviewed(hash: string, path: string): boolean {
+		const rec = this.reviews[hash];
+		if (!rec) return false;
+		// A fully-approved commit implies every one of its files is reviewed.
+		if (rec.approved) return true;
+		return rec.files?.[path] != null;
+	}
+
+	/** How many of `paths` are reviewed for `commit`. */
+	reviewedFileCount(hash: string, paths: string[]): number {
+		let n = 0;
+		for (const p of paths) if (this.isFileReviewed(hash, p)) n++;
+		return n;
+	}
+
+	async setFileReviewed(
+		hash: string,
+		path: string,
+		reviewed: boolean
+	): Promise<void> {
+		const rec = this.ensureRecord(hash);
+		if (reviewed) {
+			(rec.files ??= {})[path] = new Date().toISOString();
+		} else if (rec.files) {
+			delete rec.files[path];
+			if (Object.keys(rec.files).length === 0) delete rec.files;
+		}
+		this.pruneIfEmpty(hash);
+		this.queueSave();
+	}
+
+	/**
+	 * Un-tick a single file on an already-approved commit. Approval is a "all
+	 * files reviewed" shorthand, so removing one file means we must downgrade
+	 * to a partial state: drop the approval but keep every *other* file marked
+	 * reviewed. `allPaths` is the commit's full file list (the caller has it
+	 * loaded; the plugin does not).
+	 */
+	async downgradeApprovalExcept(
+		hash: string,
+		allPaths: string[],
+		exceptPath: string
+	): Promise<void> {
+		const now = new Date().toISOString();
+		const files: Record<string, string> = {};
+		for (const p of allPaths) {
+			if (p !== exceptPath) files[p] = now;
+		}
+		this.reviews[hash] = {
+			approved: false,
+			reviewedAt: null,
+			files: Object.keys(files).length > 0 ? files : undefined,
+		};
+		this.pruneIfEmpty(hash);
+		this.queueSave();
+	}
+
+	/** Approves many commits at once and persists in a single write. Returns
+	 * how many were newly approved. */
+	async approveMany(hashes: string[]): Promise<number> {
+		const now = new Date().toISOString();
+		let changed = 0;
+		for (const hash of hashes) {
+			if (this.reviews[hash]?.approved) continue;
+			this.reviews[hash] = { approved: true, reviewedAt: now };
+			changed++;
+		}
+		if (changed > 0) await this.persist();
+		return changed;
+	}
+
+	private ensureRecord(hash: string): ReviewRecord {
+		let rec = this.reviews[hash];
+		if (!rec) {
+			rec = { approved: false, reviewedAt: null };
+			this.reviews[hash] = rec;
+		}
+		return rec;
+	}
+
+	/** Drops records that carry no approval and no per-file state. */
+	private pruneIfEmpty(hash: string): void {
+		const rec = this.reviews[hash];
+		if (
+			rec &&
+			!rec.approved &&
+			(!rec.files || Object.keys(rec.files).length === 0)
+		) {
+			delete this.reviews[hash];
+		}
 	}
 
 	// --------------------------------------------------------- gitignore guard

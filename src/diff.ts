@@ -244,9 +244,33 @@ const STATUS_LABEL: Record<FileStatus, string> = {
 /** Lines beyond which a file's body is collapsed by default. */
 const LARGE_FILE_LINES = 600;
 
+export interface FileReviewHooks {
+	/** Whether this file currently counts as reviewed. */
+	isReviewed: (file: DiffFile) => boolean;
+	/** Called when the user ticks/unticks a file's review circle. */
+	onToggle: (file: DiffFile, reviewed: boolean) => void;
+}
+
 export interface RenderDiffOptions {
 	/** Called the first time a file body is rendered (for perf accounting). */
 	onRenderFile?: (file: DiffFile) => void;
+	/** When provided, each file header gets a circular "reviewed" checkbox. */
+	fileReview?: FileReviewHooks;
+}
+
+/** Stable identity for a file within a commit (matches the displayed name). */
+export function fileReviewKey(file: DiffFile): string {
+	return file.newPath || file.oldPath;
+}
+
+/** Paints a circular file-review checkbox (and its file card) for `reviewed`. */
+export function paintFileCheck(check: HTMLElement, reviewed: boolean): void {
+	check.toggleClass("is-checked", reviewed);
+	check.setAttr("aria-checked", String(reviewed));
+	check.empty();
+	if (reviewed) setIcon(check, "check");
+	const fileEl = check.closest(".ghr-file") as HTMLElement | null;
+	fileEl?.toggleClass("ghr-file-reviewed", reviewed);
 }
 
 /**
@@ -256,7 +280,7 @@ export interface RenderDiffOptions {
 export function renderDiff(
 	container: HTMLElement,
 	files: DiffFile[],
-	_options: RenderDiffOptions = {}
+	options: RenderDiffOptions = {}
 ): void {
 	container.empty();
 
@@ -272,6 +296,11 @@ export function renderDiff(
 		const fileEl = container.createDiv({ cls: "ghr-file" });
 
 		const header = fileEl.createDiv({ cls: "ghr-file-header" });
+
+		if (options.fileReview) {
+			wireFileCheck(header, file, options.fileReview);
+		}
+
 		const caret = header.createSpan({ cls: "ghr-caret" });
 		setIcon(caret, "chevron-down");
 
@@ -350,6 +379,36 @@ export function renderDiff(
 
 		wireCollapse(header, caret, fileEl, renderBody);
 	}
+}
+
+function wireFileCheck(
+	header: HTMLElement,
+	file: DiffFile,
+	hooks: FileReviewHooks
+): void {
+	const check = header.createSpan({
+		cls: "ghr-file-check",
+		attr: {
+			role: "checkbox",
+			tabindex: "0",
+			"aria-label": "Mark this file reviewed",
+		},
+	});
+	check.dataset.ghrKey = fileReviewKey(file);
+	paintFileCheck(check, hooks.isReviewed(file));
+
+	const toggle = (e: Event) => {
+		// Never let a review click also collapse/expand the file.
+		e.preventDefault();
+		e.stopPropagation();
+		const next = !check.hasClass("is-checked");
+		paintFileCheck(check, next);
+		hooks.onToggle(file, next);
+	};
+	check.addEventListener("click", toggle);
+	check.addEventListener("keydown", (e: KeyboardEvent) => {
+		if (e.key === "Enter" || e.key === " ") toggle(e);
+	});
 }
 
 function wireCollapse(

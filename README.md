@@ -15,10 +15,19 @@ left to review.
 
 - **Full commit history** loaded straight from your repo (`git log`).
 - **Dark-mode diff view** with per-file collapsing, line numbers, rename
-  detection, and add/remove highlighting. Merge commits render their combined
-  diff.
+  detection, and add/remove highlighting.
+- **Per-file review circles** — tick off each changed file as you read it. A
+  live `2 / 5 files reviewed` counter shows progress, and when every file is
+  ticked the commit is *ready to approve*.
 - **Reviewed & approved checkbox** per commit, plus a record of *when* you
-  approved it.
+  approved it. Approving a commit fills in all its file circles; un-ticking a
+  file on an approved commit drops it back to a partial review.
+- **Auto-advance**: approve the commit you're viewing from the list and the
+  detail pane jumps to the next one to review.
+- **Merges auto-expand** to show every change they introduced (vs the first
+  parent), with a toggle back to the merge's own conflict-resolution diff.
+- **Approve up to a date** — bulk-approve every commit on or before a chosen
+  date in one click (great for clearing out old auto-commits).
 - **Filter** between *All commits*, *Needs review*, and *Approved*, with a live
   count of how many are left.
 - **Search** by commit message, hash, or author.
@@ -48,7 +57,14 @@ In short: **your review state is local-only and can never enter your history.**
 
 ## Installation
 
-### From source (recommended)
+### From a release
+
+Download `main.js`, `manifest.json`, and `styles.css` from the
+[latest release](https://github.com/timdommett/obsidian-git-history-reviewer/releases/latest),
+drop them into `<your-vault>/.obsidian/plugins/git-history-reviewer/`, reload
+Obsidian, and enable **Git History Reviewer** in *Settings → Community plugins*.
+
+### From source
 
 `main.js` is a build artifact and is **not** committed, so build it first:
 
@@ -83,6 +99,30 @@ Symlink (or clone) this repo into your vault's plugin folder and run
 | **Git executable path** | Override if `git` isn't on your PATH. |
 | **Keep review state local** | Auto-manage `.gitignore` (leave on). |
 | **Protect review data now** | Run the `.gitignore` protection immediately. |
+
+## Releasing (maintainers)
+
+1. Bump the version (updates `manifest.json` and `versions.json` via
+   `version-bump.mjs`):
+
+   ```bash
+   npm version patch   # or minor / major
+   ```
+
+2. Push the commit **and** the tag:
+
+   ```bash
+   git push && git push --tags
+   ```
+
+The tag (e.g. `1.0.1`, no `v` prefix) triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
+the plugin and attaches `main.js`, `manifest.json`, and `styles.css` to a new
+GitHub release — exactly what the Obsidian Community Plugins directory expects.
+
+To list the plugin in the directory, submit a PR adding it to
+[`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases)
+once a release exists.
 
 ## Requirements
 
