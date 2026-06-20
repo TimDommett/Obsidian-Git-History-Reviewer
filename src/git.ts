@@ -285,12 +285,32 @@ export class GitService {
 	 * (which expose the pull-request head refs).
 	 */
 	async fetchPullRefs(remote: string): Promise<void> {
+		// Also fetch the `…/merge` refs: GitHub keeps one only while a PR is
+		// open (and mergeable) and drops it when the PR is closed/merged, so
+		// with `--prune` they become a local signal for "still open".
 		await this.run([
 			"fetch",
 			"--prune",
 			remote,
 			`+refs/pull/*/head:refs/remotes/${remote}/pr/*`,
+			`+refs/pull/*/merge:refs/remotes/${remote}/pr-merge/*`,
 		]);
+	}
+
+	/** Numbers of PRs that still have a `…/merge` ref (i.e. open & mergeable). */
+	private async openPullNumbers(remote: string): Promise<Set<number>> {
+		const res = await this.runRaw([
+			"for-each-ref",
+			"--format=%(refname)",
+			`refs/remotes/${remote}/pr-merge/*`,
+		]);
+		const nums = new Set<number>();
+		if (res.code !== 0) return nums;
+		for (const line of res.stdout.split("\n")) {
+			const m = line.trim().match(/\/pr-merge\/(\d+)$/);
+			if (m) nums.add(parseInt(m[1], 10));
+		}
+		return nums;
 	}
 
 	/** True when `ancestor` is an ancestor of (already contained in) `ref`. */
@@ -326,9 +346,15 @@ export class GitService {
 			`refs/remotes/${remote}/pr/*`,
 		]);
 		const all = parsePullRefs(out);
+		const openNumbers = await this.openPullNumbers(remote);
 		const open: PullRequestRef[] = [];
 		for (const pr of all) {
-			if (!(await this.isAncestor(pr.head, base))) open.push(pr);
+			// Drop closed PRs (no `…/merge` ref). The size guard keeps the old
+			// behaviour if merge refs aren't available at all.
+			if (openNumbers.size > 0 && !openNumbers.has(pr.number)) continue;
+			// Drop already-merged PRs (head is contained in the base branch).
+			if (await this.isAncestor(pr.head, base)) continue;
+			open.push(pr);
 		}
 		open.sort((a, b) => b.number - a.number);
 		return open;

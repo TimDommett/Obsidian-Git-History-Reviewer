@@ -1,7 +1,13 @@
 import { App, Modal, Notice } from "obsidian";
 import type GitHistoryReviewerPlugin from "./main";
 import { GitError, PullRequestRef } from "./git";
-import { DiffFile, parseDiff, renderDiff } from "./diff";
+import {
+	DiffFile,
+	FileReviewHooks,
+	fileReviewKey,
+	parseDiff,
+	renderDiff,
+} from "./diff";
 
 function shortDate(iso: string): string {
 	const d = new Date(iso);
@@ -25,6 +31,8 @@ export class PrPanel {
 	private rowByNumber = new Map<number, HTMLElement>();
 	private listEl!: HTMLElement;
 	private detailEl!: HTMLElement;
+	private progressEl: HTMLElement | null = null;
+	private activeFiles: DiffFile[] = [];
 	private busy = false;
 
 	constructor(
@@ -102,6 +110,8 @@ export class PrPanel {
 
 	private renderDetailMessage(text: string): void {
 		this.detailEl.empty();
+		this.progressEl = null;
+		this.activeFiles = [];
 		this.detailEl.createDiv({ cls: "ghr-detail-placeholder", text });
 	}
 
@@ -156,6 +166,7 @@ export class PrPanel {
 
 	private async renderDetail(pr: PullRequestRef): Promise<void> {
 		this.detailEl.empty();
+		this.activeFiles = [];
 
 		const head = this.detailEl.createDiv({ cls: "ghr-detail-head" });
 		const topRow = head.createDiv({ cls: "ghr-detail-top" });
@@ -170,6 +181,22 @@ export class PrPanel {
 			cls: "ghr-reviewed-at",
 			text: this.base ? `into ${this.base}` : "",
 		});
+
+		// Live "N / M files reviewed" — these ticks are local-only and never
+		// approve or merge the PR.
+		this.progressEl = topRow.createSpan({
+			cls: "ghr-progress",
+			attr: { role: "status", "aria-live": "polite" },
+		});
+
+		// "Hide reviewed" toggle (mirrors the commit view's setting). Its
+		// handler is wired after the diff container exists, below.
+		const hideWrap = topRow.createEl("label", { cls: "ghr-hide-toggle" });
+		const hideCheck = hideWrap.createEl("input", {
+			attr: { type: "checkbox" },
+		});
+		hideCheck.checked = this.plugin.settings.hideReviewedFiles;
+		hideWrap.createSpan({ text: "Hide reviewed" });
 
 		head.createDiv({
 			cls: "ghr-detail-subject",
@@ -189,6 +216,57 @@ export class PrPanel {
 
 		const scroll = this.detailEl.createDiv({ cls: "ghr-diff-scroll" });
 		const diffWrap = scroll.createDiv({ cls: "ghr-diff-wrap" });
+
+		hideCheck.addEventListener("change", () => {
+			this.plugin.settings.hideReviewedFiles = hideCheck.checked;
+			void this.plugin.saveSettings();
+			void this.renderDiffInto(diffWrap, pr);
+		});
+
+		await this.renderDiffInto(diffWrap, pr);
+	}
+
+	private prKey(pr: PullRequestRef): string {
+		// Namespaced so it never collides with a real commit hash, and tied to
+		// the head so a force-push resets the check-offs.
+		return `pr/${pr.head}`;
+	}
+
+	private fileHooks(pr: PullRequestRef): FileReviewHooks {
+		const key = this.prKey(pr);
+		return {
+			isReviewed: (file) =>
+				this.plugin.isFileReviewed(key, fileReviewKey(file)),
+			onToggle: (file, reviewed) => {
+				void this.plugin.setFileReviewed(
+					key,
+					fileReviewKey(file),
+					reviewed
+				);
+				this.updateProgress(pr);
+			},
+		};
+	}
+
+	private updateProgress(pr: PullRequestRef): void {
+		if (!this.progressEl) return;
+		const key = this.prKey(pr);
+		const keys = this.activeFiles.map(fileReviewKey);
+		this.progressEl.empty();
+		if (keys.length === 0) return;
+		const done = keys.filter((k) =>
+			this.plugin.isFileReviewed(key, k)
+		).length;
+		this.progressEl.setText(
+			`${done} / ${keys.length} files reviewed`
+		);
+	}
+
+	private async renderDiffInto(
+		diffWrap: HTMLElement,
+		pr: PullRequestRef
+	): Promise<void> {
+		diffWrap.empty();
 		diffWrap.createDiv({ cls: "ghr-loading", text: "Loading diff…" });
 
 		let files: DiffFile[];
@@ -205,8 +283,13 @@ export class PrPanel {
 			return;
 		}
 		if (this.selected !== pr.number) return;
+		this.activeFiles = files;
 		diffWrap.empty();
-		renderDiff(diffWrap, files);
+		renderDiff(diffWrap, files, {
+			fileReview: this.fileHooks(pr),
+			hideReviewed: this.plugin.settings.hideReviewedFiles,
+		});
+		this.updateProgress(pr);
 	}
 
 	private async getDiff(pr: PullRequestRef): Promise<DiffFile[]> {

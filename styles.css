@@ -451,7 +451,8 @@
 	margin-bottom: 16px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
-	overflow: hidden;
+	/* No `overflow: hidden` here: it would make the file card the sticky
+	   container and stop the header pinning to the scroll area. */
 	background: var(--background-primary);
 }
 
@@ -466,8 +467,14 @@
 	position: sticky;
 	top: 0;
 	z-index: 1;
+	/* Round the top corners to match the card now that it isn't clipped. */
+	border-radius: 7px 7px 0 0;
 	/* Keep a tabbed-to file circle's focus ring clear of the sticky detail head. */
 	scroll-margin-top: 56px;
+}
+
+.ghr-file.ghr-collapsed .ghr-file-header {
+	border-radius: 7px;
 }
 
 .ghr-file-header:hover {
