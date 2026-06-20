@@ -374,11 +374,21 @@ export function renderDiff(
 		wireCollapse(header, caret, fileEl, renderBody);
 
 		// The review circle sits at the far right of the header. Ticking a file
-		// collapses it (you're done reading it); un-ticking re-opens it.
+		// collapses it (you're done reading it); un-ticking re-opens it. On a
+		// click-collapse we also slide the next file up under the cursor so you
+		// can review straight down without moving the mouse.
 		if (options.fileReview) {
-			wireFileCheck(header, file, options.fileReview, (reviewed) => {
-				setCollapsed(fileEl, caret, reviewed, renderBody);
-			});
+			wireFileCheck(
+				header,
+				file,
+				options.fileReview,
+				(reviewed, cursorY) => {
+					setCollapsed(fileEl, caret, reviewed, renderBody);
+					if (reviewed && cursorY != null) {
+						scrollNextFileToCursor(fileEl, cursorY);
+					}
+				}
+			);
 		}
 	}
 }
@@ -387,7 +397,7 @@ function wireFileCheck(
 	header: HTMLElement,
 	file: DiffFile,
 	hooks: FileReviewHooks,
-	onAfterToggle?: (reviewed: boolean) => void
+	onAfterToggle?: (reviewed: boolean, cursorY: number | null) => void
 ): void {
 	const key = fileReviewKey(file);
 	const check = header.createSpan({
@@ -408,7 +418,10 @@ function wireFileCheck(
 		const next = !check.hasClass("is-checked");
 		paintFileCheck(check, next);
 		hooks.onToggle(file, next);
-		onAfterToggle?.(next);
+		// Pointer y-position (null for keyboard) so the next file can slide up
+		// under the cursor on collapse.
+		const cursorY = e instanceof MouseEvent ? e.clientY : null;
+		onAfterToggle?.(next, cursorY);
 	};
 	check.addEventListener("click", toggle);
 	check.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -441,14 +454,45 @@ function wireCollapse(
 	fileEl: HTMLElement,
 	onExpand?: () => void
 ): void {
-	header.addEventListener("click", () => {
-		setCollapsed(
-			fileEl,
-			caret,
-			!fileEl.hasClass("ghr-collapsed"),
-			onExpand
-		);
+	header.addEventListener("click", (e) => {
+		const willCollapse = !fileEl.hasClass("ghr-collapsed");
+		setCollapsed(fileEl, caret, willCollapse, onExpand);
+		// On collapse, bring the next file up under the cursor so you can keep
+		// clicking through files without moving the mouse.
+		if (willCollapse) scrollNextFileToCursor(fileEl, e.clientY);
 	});
+}
+
+/** Nearest scrollable ancestor (the detail pane), or null. */
+function nearestScroller(el: HTMLElement): HTMLElement | null {
+	let parent = el.parentElement;
+	while (parent) {
+		const overflowY = window.getComputedStyle(parent).overflowY;
+		if (overflowY === "auto" || overflowY === "scroll") return parent;
+		parent = parent.parentElement;
+	}
+	return null;
+}
+
+/**
+ * After a file collapses, slide the next file's header up to the cursor's
+ * y-position so files can be reviewed straight down without moving the mouse.
+ * Only ever nudges upward, and no-ops when there is no following file.
+ */
+function scrollNextFileToCursor(fileEl: HTMLElement, cursorY: number): void {
+	const next = fileEl.nextElementSibling;
+	if (
+		!(next instanceof HTMLElement) ||
+		!next.classList.contains("ghr-file")
+	) {
+		return;
+	}
+	const nextHeader = next.querySelector<HTMLElement>(".ghr-file-header");
+	const scroller = nearestScroller(fileEl);
+	if (!nextHeader || !scroller) return;
+	// Reading the rect after the collapse reflow reflects the new layout.
+	const delta = nextHeader.getBoundingClientRect().top - cursorY;
+	if (delta > 0) scroller.scrollTop += delta;
 }
 
 function renderFileBody(body: HTMLElement, file: DiffFile): void {
