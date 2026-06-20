@@ -55,6 +55,44 @@ This plugin avoids that completely:
 
 In short: **your review state is local-only and can never enter your history.**
 
+## Sharing review state across devices
+
+By default your review state is **local-only** — that's the whole point of the
+section above, and it's the right default. But if you review on more than one
+machine, you can opt in to syncing it with **Obsidian Sync**.
+
+Because the state lives in this plugin's `data.json`
+(`.obsidian/plugins/git-history-reviewer/data.json`), Obsidian Sync can carry it
+along with your other plugin settings:
+
+1. In **Settings → Sync**, enable syncing of **community plugin settings** (the
+   exact wording varies by Obsidian version — it's the option that covers
+   installed community plugins and their data). That includes this plugin's
+   `data.json`.
+2. That's it — there's no plugin setting to change. The `.gitignore` protection
+   from the section above only affects *git*; it has no effect on Obsidian Sync,
+   so your review state keeps out of your vault's history while still syncing
+   freely.
+
+> Both devices must be desktop — the plugin shells out to `git` and doesn't run
+> on mobile (see [Requirements](#requirements)).
+
+### Caveats (read these)
+
+This is deliberately the *simplest* sync, not the smartest. Two things to know:
+
+- **It reads `data.json` once, at startup.** If a device already has Obsidian
+  open when newer review state syncs in, the running plugin won't see it — and
+  the next time you tick something there it writes its *older* state back over
+  the synced file. **Reload the plugin (or restart Obsidian) on a device before
+  reviewing if you last reviewed somewhere else.**
+- **Whole-file, last-writer-wins.** Obsidian Sync reconciles `data.json` as a
+  whole file, so reviewing on two devices at once — or offline on both — lets one
+  device's session clobber the other's. **Review on one device at a time.**
+
+Used that way — one device at a time, reopen Obsidian when you switch — your
+approvals follow you around with zero extra setup.
+
 ## Installation
 
 ### From a release
