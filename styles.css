@@ -1,0 +1,684 @@
+/* ===========================================================================
+   Git History Reviewer
+   Uses Obsidian theme variables so it adapts to any theme, with diff colours
+   tuned to look great in dark mode.
+   ========================================================================= */
+
+.ghr-root {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 0;
+	overflow: hidden;
+}
+
+/* ------------------------------------------------------------------ toolbar */
+
+.ghr-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	flex: 0 0 auto;
+}
+
+.ghr-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.ghr-title-icon {
+	display: inline-flex;
+	color: var(--text-accent);
+}
+
+.ghr-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1 1 auto;
+}
+
+.ghr-search {
+	flex: 1 1 220px;
+	max-width: 360px;
+	min-width: 140px;
+}
+
+.ghr-icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px 6px;
+	cursor: pointer;
+}
+
+.ghr-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.ghr-count-approved {
+	color: var(--color-green, #3fb950);
+	font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- the pill */
+
+.ghr-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 10px;
+	border-radius: 999px;
+	font-size: var(--font-ui-smaller);
+	cursor: default;
+	border: 1px solid transparent;
+	white-space: nowrap;
+}
+
+.ghr-pill-icon {
+	display: inline-flex;
+}
+
+.ghr-pill-ok {
+	color: var(--color-green, #3fb950);
+	background: rgba(63, 185, 80, 0.12);
+	border-color: rgba(63, 185, 80, 0.35);
+}
+
+.ghr-pill-warn {
+	color: var(--color-orange, #e3b341);
+	background: rgba(227, 179, 65, 0.12);
+	border-color: rgba(227, 179, 65, 0.45);
+	cursor: pointer;
+}
+
+.ghr-pill-warn:hover {
+	background: rgba(227, 179, 65, 0.22);
+}
+
+/* -------------------------------------------------------------------- body */
+
+.ghr-body {
+	display: flex;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.ghr-list-wrap {
+	flex: 0 0 340px;
+	max-width: 46%;
+	min-width: 240px;
+	overflow-y: auto;
+	border-right: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+}
+
+.ghr-list {
+	display: flex;
+	flex-direction: column;
+}
+
+.ghr-sentinel {
+	height: 1px;
+}
+
+.ghr-list-message,
+.ghr-detail-placeholder {
+	padding: 24px 16px;
+	color: var(--text-muted);
+	white-space: pre-wrap;
+	line-height: 1.5;
+}
+
+/* --------------------------------------------------------------- list rows */
+
+.ghr-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	border-left: 3px solid transparent;
+	cursor: pointer;
+}
+
+.ghr-row:hover {
+	background: var(--background-modifier-hover);
+}
+
+.ghr-row.ghr-selected {
+	background: var(--background-modifier-active-hover, var(--background-secondary-alt));
+	border-left-color: var(--text-accent);
+}
+
+.ghr-row.ghr-approved {
+	border-left-color: var(--color-green, #3fb950);
+}
+
+.ghr-row.ghr-approved .ghr-row-subject-text {
+	color: var(--text-muted);
+}
+
+.ghr-row-check {
+	margin-top: 3px;
+	flex: 0 0 auto;
+	cursor: pointer;
+}
+
+.ghr-row-main {
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.ghr-row-subject {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+
+.ghr-row-subject-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ghr-merge-badge {
+	flex: 0 0 auto;
+	font-size: 0.7em;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 1px 5px;
+	border-radius: 4px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+.ghr-row-meta {
+	display: flex;
+	gap: 8px;
+	margin-top: 2px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.ghr-row-hash {
+	font-family: var(--font-monospace);
+	color: var(--text-accent);
+}
+
+.ghr-row-author {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 120px;
+}
+
+.ghr-row-date {
+	margin-left: auto;
+	white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ detail */
+
+.ghr-detail {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-y: auto;
+	background: var(--background-primary);
+}
+
+.ghr-detail-head {
+	padding: 16px 20px 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	position: sticky;
+	top: 0;
+	background: var(--background-primary);
+	z-index: 2;
+}
+
+.ghr-detail-top {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 8px;
+}
+
+.ghr-approve {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 12px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	cursor: pointer;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.ghr-approve input {
+	cursor: pointer;
+}
+
+.ghr-reviewed-at {
+	font-size: var(--font-ui-smaller);
+	color: var(--color-green, #3fb950);
+}
+
+.ghr-detail-subject {
+	font-size: var(--font-ui-large);
+	font-weight: 600;
+	color: var(--text-normal);
+	line-height: 1.3;
+}
+
+.ghr-detail-body {
+	margin: 8px 0 0;
+	padding: 8px 12px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: pre-wrap;
+	overflow-x: auto;
+}
+
+.ghr-detail-meta {
+	margin-top: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.ghr-meta-row {
+	display: flex;
+	gap: 10px;
+	font-size: var(--font-ui-smaller);
+}
+
+.ghr-meta-key {
+	flex: 0 0 64px;
+	color: var(--text-faint);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.ghr-meta-val {
+	color: var(--text-muted);
+	word-break: break-word;
+}
+
+.ghr-mono {
+	font-family: var(--font-monospace);
+}
+
+.ghr-copyable {
+	cursor: pointer;
+}
+
+.ghr-copyable:hover {
+	color: var(--text-accent);
+	text-decoration: underline;
+}
+
+/* -------------------------------------------------------------------- diff */
+
+.ghr-diff-wrap {
+	padding: 12px 16px 40px;
+}
+
+.ghr-loading,
+.ghr-empty {
+	color: var(--text-muted);
+	padding: 16px 0;
+}
+
+.ghr-merge-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 12px;
+	padding: 8px 12px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+}
+
+.ghr-merge-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	flex: 1 1 auto;
+}
+
+.ghr-merge-btn {
+	flex: 0 0 auto;
+	cursor: pointer;
+}
+
+.ghr-error {
+	color: var(--text-error);
+	white-space: pre-wrap;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	padding: 12px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+}
+
+.ghr-file {
+	margin-bottom: 16px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	overflow: hidden;
+	background: var(--background-primary);
+}
+
+.ghr-file-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	background: var(--background-secondary);
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	/* Keep a tabbed-to file circle's focus ring clear of the sticky detail head. */
+	scroll-margin-top: 56px;
+}
+
+.ghr-file-header:hover {
+	background: var(--background-modifier-hover);
+}
+
+.ghr-caret {
+	display: inline-flex;
+	color: var(--text-muted);
+	flex: 0 0 auto;
+}
+
+.ghr-file-name {
+	font-family: var(--font-monospace);
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1 1 auto;
+}
+
+.ghr-status {
+	flex: 0 0 auto;
+	font-size: 0.7em;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 1px 6px;
+	border-radius: 4px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+.ghr-status-added {
+	color: var(--color-green, #3fb950);
+	background: rgba(63, 185, 80, 0.15);
+}
+
+.ghr-status-deleted {
+	color: var(--color-red, #f85149);
+	background: rgba(248, 81, 73, 0.15);
+}
+
+.ghr-status-renamed,
+.ghr-status-copied {
+	color: var(--color-blue, #58a6ff);
+	background: rgba(88, 166, 255, 0.15);
+}
+
+.ghr-file-stat {
+	flex: 0 0 auto;
+	display: flex;
+	gap: 6px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.ghr-stat-add {
+	color: var(--color-green, #3fb950);
+}
+
+.ghr-stat-del {
+	color: var(--color-red, #f85149);
+}
+
+.ghr-file.ghr-collapsed .ghr-file-body {
+	display: none;
+}
+
+.ghr-large-hint,
+.ghr-binary {
+	padding: 12px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.ghr-file-body {
+	overflow-x: auto;
+	background: var(--background-primary);
+}
+
+.ghr-diff-table {
+	display: table;
+	width: 100%;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.5;
+	border-collapse: collapse;
+}
+
+.ghr-line {
+	display: flex;
+	white-space: pre;
+}
+
+.ghr-gutter {
+	flex: 0 0 auto;
+	width: 48px;
+	padding: 0 8px;
+	text-align: right;
+	color: var(--text-faint);
+	background: var(--background-secondary);
+	border-right: 1px solid var(--background-modifier-border);
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.ghr-code {
+	flex: 1 1 auto;
+	padding: 0 10px;
+	white-space: pre;
+	color: var(--text-normal);
+}
+
+.ghr-sign {
+	display: inline-block;
+	width: 1ch;
+	color: var(--text-faint);
+}
+
+.ghr-line-add {
+	background: rgba(63, 185, 80, 0.15);
+}
+
+.ghr-line-add .ghr-sign {
+	color: var(--color-green, #3fb950);
+}
+
+.ghr-line-add .ghr-gutter {
+	background: rgba(63, 185, 80, 0.12);
+	color: var(--color-green, #3fb950);
+}
+
+.ghr-line-del {
+	background: rgba(248, 81, 73, 0.15);
+}
+
+.ghr-line-del .ghr-sign {
+	color: var(--color-red, #f85149);
+}
+
+.ghr-line-del .ghr-gutter {
+	background: rgba(248, 81, 73, 0.12);
+	color: var(--color-red, #f85149);
+}
+
+.ghr-line-meta .ghr-code {
+	color: var(--text-faint);
+	font-style: italic;
+}
+
+.ghr-hunk {
+	background: var(--background-secondary-alt, var(--background-secondary));
+}
+
+.ghr-hunk .ghr-code {
+	color: var(--text-accent);
+}
+
+.ghr-hunk .ghr-gutter {
+	background: var(--background-secondary-alt, var(--background-secondary));
+}
+
+/* --------------------------------------------------------------- settings */
+
+.ghr-settings-note {
+	margin-top: 18px;
+	padding: 12px 14px;
+	border-radius: 8px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.5;
+}
+
+/* --------------------------------------------------- per-file review circle */
+
+.ghr-file-check {
+	flex: 0 0 auto;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	/* A solid fill + higher-contrast border so the resting (unchecked) circle
+	   is clearly visible against the header on light themes too. */
+	border: 2px solid var(--checkbox-border-color, var(--text-muted));
+	background: var(--background-primary);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-on-accent, #fff);
+	cursor: pointer;
+	transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+
+.ghr-file-check:hover {
+	border-color: var(--color-green, #3fb950);
+}
+
+.ghr-file-check:focus-visible {
+	outline: 2px solid var(--text-accent);
+	outline-offset: 1px;
+}
+
+.ghr-file-check.is-checked {
+	background: var(--color-green, #3fb950);
+	border-color: var(--color-green, #3fb950);
+}
+
+.ghr-file-check svg {
+	width: 12px;
+	height: 12px;
+}
+
+.ghr-file.ghr-file-reviewed {
+	border-color: color-mix(in srgb, var(--color-green, #3fb950) 45%, transparent);
+}
+
+.ghr-file.ghr-file-reviewed .ghr-file-name {
+	color: var(--text-muted);
+}
+
+/* ------------------------------------------------------ per-file progress */
+
+.ghr-progress {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.ghr-progress.ghr-progress-ready {
+	color: var(--color-green, #3fb950);
+}
+
+.ghr-progress.ghr-progress-done {
+	color: var(--text-faint);
+}
+
+.ghr-progress-hint {
+	font-weight: 600;
+}
+
+/* ------------------------------------------------- approve-up-to-date modal */
+
+.ghr-date-modal .ghr-date-intro {
+	margin-top: 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+}
+
+.ghr-date-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 14px 0 6px;
+}
+
+.ghr-date-count {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	min-height: 1.4em;
+}
+
+.ghr-date-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 18px;
+}
+
+/* ----------------------------------------------------- narrow / responsive */
+
+@media (max-width: 700px) {
+	.ghr-body {
+		flex-direction: column;
+	}
+
+	.ghr-list-wrap {
+		flex: 0 0 45%;
+		max-width: 100%;
+		border-right: none;
+		border-bottom: 1px solid var(--background-modifier-border);
+	}
+}
