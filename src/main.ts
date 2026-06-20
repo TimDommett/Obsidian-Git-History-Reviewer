@@ -12,7 +12,6 @@ import {
 	HistoryFilter,
 	VIEW_TYPE_GIT_HISTORY,
 } from "./view";
-import { PrReviewView, VIEW_TYPE_PR_REVIEW } from "./prview";
 
 export interface ReviewRecord {
 	approved: boolean;
@@ -70,33 +69,15 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 			VIEW_TYPE_GIT_HISTORY,
 			(leaf) => new GitHistoryView(leaf, this)
 		);
-		this.registerView(
-			VIEW_TYPE_PR_REVIEW,
-			(leaf) => new PrReviewView(leaf, this)
-		);
 
 		this.addRibbonIcon("history", "Git History Reviewer", () => {
 			void this.activateView();
 		});
 
-		this.addRibbonIcon(
-			"git-pull-request",
-			"Incoming pull requests",
-			() => {
-				void this.activatePrView();
-			}
-		);
-
 		this.addCommand({
 			id: "open",
 			name: "Open",
 			callback: () => void this.activateView(),
-		});
-
-		this.addCommand({
-			id: "open-pull-requests",
-			name: "Open incoming pull requests",
-			callback: () => void this.activatePrView(),
 		});
 
 		this.addSettingTab(new GitHistoryReviewerSettingTab(this.app, this));
@@ -352,21 +333,6 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 		const leaf = workspace.getLeaf("tab");
 		await leaf.setViewState({
 			type: VIEW_TYPE_GIT_HISTORY,
-			active: true,
-		});
-		await workspace.revealLeaf(leaf);
-	}
-
-	async activatePrView(): Promise<void> {
-		const { workspace } = this.app;
-		const existing = workspace.getLeavesOfType(VIEW_TYPE_PR_REVIEW);
-		if (existing.length > 0) {
-			await workspace.revealLeaf(existing[0]);
-			return;
-		}
-		const leaf = workspace.getLeaf("tab");
-		await leaf.setViewState({
-			type: VIEW_TYPE_PR_REVIEW,
 			active: true,
 		});
 		await workspace.revealLeaf(leaf);

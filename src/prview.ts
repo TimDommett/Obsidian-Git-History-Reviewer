@@ -1,9 +1,7 @@
-import { App, ItemView, Modal, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { App, Modal, Notice } from "obsidian";
 import type GitHistoryReviewerPlugin from "./main";
 import { GitError, PullRequestRef } from "./git";
 import { DiffFile, parseDiff, renderDiff } from "./diff";
-
-export const VIEW_TYPE_PR_REVIEW = "git-history-pr-review-view";
 
 function shortDate(iso: string): string {
 	const d = new Date(iso);
@@ -11,81 +9,39 @@ function shortDate(iso: string): string {
 }
 
 /**
- * A second tab that reviews and merges incoming GitHub pull requests using only
- * the local `git` binary: PR head commits are fetched from the GitHub
- * pull-request head refs, the unmerged ones are listed, each PR's diff is shown
- * with the shared diff
+ * Embeddable "incoming pull requests" panel, shown as a mode within the Git
+ * History Reviewer view. It works with the local `git` binary only (no API
+ * token): PR head commits are fetched from the GitHub pull-request head refs,
+ * the unmerged ones are listed, each PR's diff is shown with the shared diff
  * renderer, and "Merge & push" merges the PR into the current branch and pushes
  * — which closes the PR on GitHub.
  */
-export class PrReviewView extends ItemView {
+export class PrPanel {
 	private prs: PullRequestRef[] = [];
 	private selected: number | null = null;
 	private base: string | null = null;
 	private remote: string | null = null;
 	private diffCache = new Map<number, DiffFile[]>();
 	private rowByNumber = new Map<number, HTMLElement>();
-
 	private listEl!: HTMLElement;
 	private detailEl!: HTMLElement;
-	private baseEl!: HTMLElement;
 	private busy = false;
 
-	constructor(leaf: WorkspaceLeaf, private plugin: GitHistoryReviewerPlugin) {
-		super(leaf);
-	}
+	constructor(
+		private plugin: GitHistoryReviewerPlugin,
+		private root: HTMLElement
+	) {}
 
-	getViewType(): string {
-		return VIEW_TYPE_PR_REVIEW;
-	}
-
-	getDisplayText(): string {
-		return "Incoming pull requests";
-	}
-
-	getIcon(): string {
-		return "git-pull-request";
-	}
-
-	async onOpen(): Promise<void> {
-		this.contentEl.empty();
-		this.contentEl.addClass("ghr-root");
-		this.buildToolbar();
-		this.buildBody();
-		await this.reload();
-	}
-
-	// ---------------------------------------------------------------- UI build
-
-	private buildToolbar(): void {
-		const bar = this.contentEl.createDiv({ cls: "ghr-toolbar" });
-
-		const title = bar.createDiv({ cls: "ghr-title" });
-		const icon = title.createSpan({ cls: "ghr-title-icon" });
-		setIcon(icon, "git-pull-request");
-		title.createSpan({ text: "Incoming pull requests" });
-
-		const refresh = bar.createEl("button", {
-			cls: "ghr-icon-btn",
-			attr: { "aria-label": "Fetch & refresh pull requests" },
-		});
-		setIcon(refresh, "refresh-cw");
-		refresh.addEventListener("click", () => void this.reload());
-
-		this.baseEl = bar.createDiv({ cls: "ghr-count" });
-	}
-
-	private buildBody(): void {
-		const body = this.contentEl.createDiv({ cls: "ghr-body" });
-
-		const listWrap = body.createDiv({ cls: "ghr-list-wrap" });
+	/** Builds the panel's list + detail panes into its root element. */
+	mount(): void {
+		const listWrap = this.root.createDiv({ cls: "ghr-list-wrap" });
 		this.listEl = listWrap.createDiv({ cls: "ghr-list" });
-
-		// "split" = fixed metadata head + an inner scroll area for the diff, so
-		// each file's header stays pinned at the top until you scroll past its
-		// file (it never tucks behind the head).
-		this.detailEl = body.createDiv({ cls: "ghr-detail ghr-detail-split" });
-		this.renderDetailMessage("Select a pull request to review its changes.");
+		this.detailEl = this.root.createDiv({
+			cls: "ghr-detail ghr-detail-split",
+		});
+		this.renderDetailMessage(
+			"Select a pull request to review its changes."
+		);
 	}
 
 	// ------------------------------------------------------------- data loading
@@ -94,7 +50,9 @@ export class PrReviewView extends ItemView {
 		const git = this.plugin.git;
 		this.diffCache.clear();
 		this.selected = null;
-		this.renderDetailMessage("Select a pull request to review its changes.");
+		this.renderDetailMessage(
+			"Select a pull request to review its changes."
+		);
 
 		if (!git.basePath) {
 			this.renderListMessage(
@@ -103,22 +61,12 @@ export class PrReviewView extends ItemView {
 			return;
 		}
 		if (!(await git.isRepo())) {
-			this.renderListMessage(
-				"No git repository found at the vault root."
-			);
+			this.renderListMessage("No git repository found at the vault root.");
 			return;
 		}
 
 		this.remote = await git.firstRemote();
 		this.base = await git.currentBranch();
-		this.baseEl.empty();
-		if (this.base) {
-			this.baseEl.createSpan({ text: "merging into " });
-			this.baseEl.createSpan({
-				cls: "ghr-count-approved",
-				text: this.base,
-			});
-		}
 
 		if (!this.remote) {
 			this.renderListMessage("This repository has no remote configured.");
@@ -214,9 +162,9 @@ export class PrReviewView extends ItemView {
 
 		const mergeBtn = topRow.createEl("button", {
 			cls: "ghr-merge-btn mod-cta",
-			text: `Merge & push`,
+			text: "Merge & push",
 		});
-		mergeBtn.addEventListener("click", () => void this.confirmMerge(pr));
+		mergeBtn.addEventListener("click", () => this.confirmMerge(pr));
 
 		topRow.createSpan({
 			cls: "ghr-reviewed-at",
@@ -277,7 +225,7 @@ export class PrReviewView extends ItemView {
 
 	private confirmMerge(pr: PullRequestRef): void {
 		if (this.busy) return;
-		new MergeConfirmModal(this.app, pr, this.base ?? "?", () =>
+		new MergeConfirmModal(this.plugin.app, pr, this.base ?? "?", () =>
 			void this.doMerge(pr)
 		).open();
 	}
@@ -355,10 +303,9 @@ class MergeConfirmModal extends Modal {
 		});
 
 		const buttons = contentEl.createDiv({ cls: "ghr-date-buttons" });
-		buttons.createEl("button", { text: "Cancel" }).addEventListener(
-			"click",
-			() => this.close()
-		);
+		buttons
+			.createEl("button", { text: "Cancel" })
+			.addEventListener("click", () => this.close());
 		const confirm = buttons.createEl("button", {
 			cls: "mod-cta",
 			text: "Merge & push",
