@@ -397,6 +397,8 @@
 	position: sticky;
 	top: 0;
 	z-index: 1;
+	/* Keep a tabbed-to file circle's focus ring clear of the sticky detail head. */
+	scroll-margin-top: 56px;
 }
 
 .ghr-file-header:hover {
@@ -578,7 +580,10 @@
 	width: 18px;
 	height: 18px;
 	border-radius: 50%;
-	border: 2px solid var(--background-modifier-border-hover, var(--background-modifier-border));
+	/* A solid fill + higher-contrast border so the resting (unchecked) circle
+	   is clearly visible against the header on light themes too. */
+	border: 2px solid var(--checkbox-border-color, var(--text-muted));
+	background: var(--background-primary);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -607,7 +612,7 @@
 }
 
 .ghr-file.ghr-file-reviewed {
-	border-color: rgba(63, 185, 80, 0.4);
+	border-color: color-mix(in srgb, var(--color-green, #3fb950) 45%, transparent);
 }
 
 .ghr-file.ghr-file-reviewed .ghr-file-name {

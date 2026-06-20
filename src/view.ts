@@ -68,6 +68,13 @@ export class GitHistoryView extends ItemView {
 
 	/** Files currently shown for the selected commit (drives per-file progress). */
 	private activeFiles: DiffFile[] = [];
+	/**
+	 * Every file key that belongs to the selected commit, regardless of which
+	 * view is shown. For a merge this is the union of the combined and
+	 * first-parent diffs, so downgrading an approval never loses files that
+	 * aren't in the currently-visible set.
+	 */
+	private allReviewKeys: string[] = [];
 
 	// Element references.
 	private listWrapEl!: HTMLElement;
@@ -201,6 +208,7 @@ export class GitHistoryView extends ItemView {
 	// ------------------------------------------------------------- data loading
 
 	async reload(): Promise<void> {
+		const prevHash = this.selectedHash;
 		this.diffCache.clear();
 		this.firstParentCache.clear();
 		this.listEl.empty();
@@ -208,6 +216,16 @@ export class GitHistoryView extends ItemView {
 		this.commits = [];
 		this.filtered = [];
 		this.renderedCount = 0;
+
+		// Drop stale detail-pane state and its live element refs; the pane is
+		// rebuilt below only if the previously-selected commit survives.
+		this.selectedHash = null;
+		this.activeFiles = [];
+		this.allReviewKeys = [];
+		this.approveCheckEl = null;
+		this.progressEl = null;
+		this.approveStatusEl = null;
+		this.renderDetailPlaceholder("Select a commit to review its changes.");
 
 		const git = this.plugin.git;
 		if (!git.basePath) {
@@ -240,6 +258,13 @@ export class GitHistoryView extends ItemView {
 		}
 
 		this.applyFilter();
+
+		// Re-open the previously-selected commit if it still exists, rebuilding
+		// the detail pane from fresh data (its diff cache was cleared above).
+		if (prevHash && this.commits.some((c) => c.hash === prevHash)) {
+			await this.select(prevHash);
+		}
+
 		await this.refreshIgnorePill();
 	}
 
@@ -353,6 +378,20 @@ export class GitHistoryView extends ItemView {
 			this.rowByHash.get(this.selectedHash)?.removeClass("ghr-selected");
 		}
 		this.selectedHash = hash;
+
+		// The target row may be past the first lazily-rendered chunk; render up
+		// to it so the highlight and scroll actually land on a real element.
+		if (!this.rowByHash.has(hash)) {
+			const idx = this.filtered.findIndex((c) => c.hash === hash);
+			while (
+				idx !== -1 &&
+				this.renderedCount <= idx &&
+				this.renderedCount < this.filtered.length
+			) {
+				this.renderNextChunk();
+			}
+		}
+
 		const row = this.rowByHash.get(hash);
 		row?.addClass("ghr-selected");
 		if (scrollIntoView) row?.scrollIntoView({ block: "nearest" });
@@ -371,6 +410,7 @@ export class GitHistoryView extends ItemView {
 		this.detailEl.empty();
 		// Reset per-commit state; the diff load below repopulates it.
 		this.activeFiles = [];
+		this.allReviewKeys = [];
 
 		const head = this.detailEl.createDiv({ cls: "ghr-detail-head" });
 
@@ -389,7 +429,10 @@ export class GitHistoryView extends ItemView {
 		this.approveCheckEl = approveCheck;
 
 		// Live per-file review progress (e.g. "2 / 5 files reviewed").
-		this.progressEl = topRow.createSpan({ cls: "ghr-progress" });
+		this.progressEl = topRow.createSpan({
+			cls: "ghr-progress",
+			attr: { role: "status", "aria-live": "polite" },
+		});
 
 		// Holder for the "approved … ago" stamp, kept in sync as state changes.
 		this.approveStatusEl = topRow.createSpan({ cls: "ghr-reviewed-at" });
@@ -476,6 +519,7 @@ export class GitHistoryView extends ItemView {
 
 		if (!commit.isMerge) {
 			this.activeFiles = files;
+			this.allReviewKeys = files.map(fileReviewKey);
 			renderDiff(diffTarget, files, { fileReview: hooks });
 			this.updateProgress(commit);
 			return;
@@ -493,16 +537,27 @@ export class GitHistoryView extends ItemView {
 		}
 		if (this.selectedHash !== commit.hash) return;
 
+		// The review universe is the union of both views, so downgrading an
+		// approval never loses files that aren't in the currently-shown set.
+		this.allReviewKeys = Array.from(
+			new Set([...files, ...(fpFiles ?? [])].map(fileReviewKey))
+		);
+
+		// An empty (but successful) first-parent diff is treated as "no full
+		// view available" — same as a load failure — so we don't auto-expand
+		// into an empty pane with a dead toggle.
+		const hasFull = fpFiles != null && fpFiles.length > 0;
+
 		const bar = diffWrap.createDiv({ cls: "ghr-merge-actions" });
 		diffWrap.insertBefore(bar, diffTarget);
 		const note = bar.createSpan({ cls: "ghr-merge-note" });
 		const btn = bar.createEl("button", { cls: "ghr-merge-btn" });
 
-		let showingFull = fpFiles != null;
+		let showingFull = hasFull;
 
 		const renderView = () => {
 			diffTarget.empty();
-			if (showingFull && fpFiles) {
+			if (showingFull && hasFull && fpFiles) {
 				this.activeFiles = fpFiles;
 				note.setText(
 					"Showing every change this merge introduced (vs its first parent)."
@@ -517,7 +572,7 @@ export class GitHistoryView extends ItemView {
 						: "Showing this merge's own changes (conflict resolutions)."
 				);
 				btn.setText(
-					fpFiles
+					hasFull
 						? "View full changes vs first parent"
 						: "Full changes unavailable"
 				);
@@ -533,9 +588,9 @@ export class GitHistoryView extends ItemView {
 			this.updateProgress(commit);
 		};
 
-		if (!fpFiles) btn.disabled = true;
+		if (!hasFull) btn.disabled = true;
 		btn.addEventListener("click", () => {
-			if (!fpFiles) return;
+			if (!hasFull) return;
 			showingFull = !showingFull;
 			renderView();
 		});
@@ -564,7 +619,12 @@ export class GitHistoryView extends ItemView {
 		if (!reviewed && wasApproved) {
 			// Un-ticking one file on an approved commit downgrades it to a
 			// partial review: every other file stays reviewed, approval drops.
-			const allKeys = this.activeFiles.map(fileReviewKey);
+			// Use the full per-commit key universe (not just the visible view)
+			// so a merge's other-view files aren't silently lost.
+			const allKeys =
+				this.allReviewKeys.length > 0
+					? this.allReviewKeys
+					: this.activeFiles.map(fileReviewKey);
 			await this.plugin.downgradeApprovalExcept(commit.hash, allKeys, key);
 		} else {
 			await this.plugin.setFileReviewed(commit.hash, key, reviewed);
@@ -671,28 +731,39 @@ export class GitHistoryView extends ItemView {
 			this.app,
 			this.commits,
 			async (hashes) => {
-				const n = await this.plugin.approveMany(hashes);
-				new Notice(
-					n === 0
-						? "Those commits were already approved."
-						: `Approved ${n} commit${n === 1 ? "" : "s"}.`
-				);
-				this.applyFilter();
-				const selected = this.selectedHash
-					? this.commits.find((c) => c.hash === this.selectedHash)
-					: undefined;
-				if (selected) {
-					if (this.approveCheckEl) {
-						this.approveCheckEl.checked = this.plugin.isApproved(
-							selected.hash
-						);
+				try {
+					const n = await this.plugin.approveMany(hashes);
+					new Notice(
+						n === 0
+							? "Those commits were already approved."
+							: `Approved ${n} commit${n === 1 ? "" : "s"}.`
+					);
+					this.applyFilter();
+					const selected = this.selectedHash
+						? this.commits.find(
+								(c) => c.hash === this.selectedHash
+						  )
+						: undefined;
+					if (selected) {
+						if (this.approveCheckEl) {
+							this.approveCheckEl.checked =
+								this.plugin.isApproved(selected.hash);
+						}
+						this.syncFileChecks(selected);
+						this.syncApproveStatus(selected);
+						this.updateProgress(selected);
 					}
-					this.syncFileChecks(selected);
-					this.syncApproveStatus(selected);
-					this.updateProgress(selected);
-				}
-				for (const v of this.plugin.getViews()) {
-					if (v !== this) v.refreshApprovals();
+					for (const v of this.plugin.getViews()) {
+						if (v !== this) v.refreshApprovals();
+					}
+				} catch (err) {
+					new Notice(
+						"Failed to save approvals — see console for details."
+					);
+					console.error(
+						"Git History Reviewer: bulk approve failed",
+						err
+					);
 				}
 			}
 		).open();

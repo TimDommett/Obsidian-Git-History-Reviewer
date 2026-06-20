@@ -60,7 +60,7 @@ In short: **your review state is local-only and can never enter your history.**
 ### From a release
 
 Download `main.js`, `manifest.json`, and `styles.css` from the
-[latest release](https://github.com/timdommett/obsidian-git-history-reviewer/releases/latest),
+[latest release](https://github.com/TimDommett/Obsidian-Git-History-Reviewer/releases/latest),
 drop them into `<your-vault>/.obsidian/plugins/git-history-reviewer/`, reload
 Obsidian, and enable **Git History Reviewer** in *Settings → Community plugins*.
 

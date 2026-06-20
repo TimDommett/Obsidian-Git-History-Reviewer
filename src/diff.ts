@@ -297,10 +297,6 @@ export function renderDiff(
 
 		const header = fileEl.createDiv({ cls: "ghr-file-header" });
 
-		if (options.fileReview) {
-			wireFileCheck(header, file, options.fileReview);
-		}
-
 		const caret = header.createSpan({ cls: "ghr-caret" });
 		setIcon(caret, "chevron-down");
 
@@ -333,16 +329,17 @@ export function renderDiff(
 
 		const body = fileEl.createDiv({ cls: "ghr-file-body" });
 
+		// Establish a body renderer (a no-op for files with nothing to expand)
+		// and the initial collapsed state, then wire collapse + the review
+		// circle uniformly for every file kind.
+		let renderBody: () => void = () => {};
+
 		if (file.isBinary && file.hunks.length === 0) {
 			body.createDiv({
 				cls: "ghr-binary",
 				text: "Binary file — no text diff available.",
 			});
-			wireCollapse(header, caret, fileEl);
-			continue;
-		}
-
-		if (file.hunks.length === 0) {
+		} else if (file.hunks.length === 0) {
 			body.createDiv({
 				cls: "ghr-binary",
 				text:
@@ -350,65 +347,91 @@ export function renderDiff(
 						? "Renamed/copied with no content changes."
 						: "No content changes.",
 			});
-			wireCollapse(header, caret, fileEl);
-			continue;
-		}
-
-		const totalLines = file.hunks.reduce(
-			(n, h) => n + h.lines.length,
-			0
-		);
-		const collapsedByDefault = totalLines > LARGE_FILE_LINES;
-
-		let rendered = false;
-		const renderBody = () => {
-			if (rendered) return;
-			rendered = true;
-			renderFileBody(body, file);
-		};
-
-		if (collapsedByDefault) {
-			fileEl.addClass("ghr-collapsed");
-			body.createDiv({
-				cls: "ghr-large-hint",
-				text: `Large change (${totalLines} lines). Click the header to expand.`,
-			});
 		} else {
-			renderBody();
+			const totalLines = file.hunks.reduce(
+				(n, h) => n + h.lines.length,
+				0
+			);
+			let rendered = false;
+			renderBody = () => {
+				if (rendered) return;
+				rendered = true;
+				renderFileBody(body, file);
+			};
+
+			if (totalLines > LARGE_FILE_LINES) {
+				setCollapsed(fileEl, caret, true);
+				body.createDiv({
+					cls: "ghr-large-hint",
+					text: `Large change (${totalLines} lines). Click the header to expand.`,
+				});
+			} else {
+				renderBody();
+			}
 		}
 
 		wireCollapse(header, caret, fileEl, renderBody);
+
+		// The review circle sits at the far right of the header. Ticking a file
+		// collapses it (you're done reading it); un-ticking re-opens it.
+		if (options.fileReview) {
+			wireFileCheck(header, file, options.fileReview, (reviewed) => {
+				setCollapsed(fileEl, caret, reviewed, renderBody);
+			});
+		}
 	}
 }
 
 function wireFileCheck(
 	header: HTMLElement,
 	file: DiffFile,
-	hooks: FileReviewHooks
+	hooks: FileReviewHooks,
+	onAfterToggle?: (reviewed: boolean) => void
 ): void {
+	const key = fileReviewKey(file);
 	const check = header.createSpan({
 		cls: "ghr-file-check",
 		attr: {
 			role: "checkbox",
 			tabindex: "0",
-			"aria-label": "Mark this file reviewed",
+			"aria-label": `Mark ${key} reviewed`,
 		},
 	});
-	check.dataset.ghrKey = fileReviewKey(file);
+	check.dataset.ghrKey = key;
 	paintFileCheck(check, hooks.isReviewed(file));
 
 	const toggle = (e: Event) => {
-		// Never let a review click also collapse/expand the file.
+		// Never let a review click also collapse/expand via the header handler.
 		e.preventDefault();
 		e.stopPropagation();
 		const next = !check.hasClass("is-checked");
 		paintFileCheck(check, next);
 		hooks.onToggle(file, next);
+		onAfterToggle?.(next);
 	};
 	check.addEventListener("click", toggle);
 	check.addEventListener("keydown", (e: KeyboardEvent) => {
+		// Ignore auto-repeat so a held key activates once, like a native control.
+		if (e.repeat) return;
 		if (e.key === "Enter" || e.key === " ") toggle(e);
 	});
+}
+
+/** Sets a file's collapsed state and keeps the caret icon in sync. */
+function setCollapsed(
+	fileEl: HTMLElement,
+	caret: HTMLElement,
+	collapsed: boolean,
+	onExpand?: () => void
+): void {
+	if (collapsed) {
+		fileEl.addClass("ghr-collapsed");
+		setIcon(caret, "chevron-right");
+	} else {
+		fileEl.removeClass("ghr-collapsed");
+		setIcon(caret, "chevron-down");
+		onExpand?.();
+	}
 }
 
 function wireCollapse(
@@ -418,15 +441,12 @@ function wireCollapse(
 	onExpand?: () => void
 ): void {
 	header.addEventListener("click", () => {
-		const collapsed = fileEl.hasClass("ghr-collapsed");
-		if (collapsed) {
-			fileEl.removeClass("ghr-collapsed");
-			setIcon(caret, "chevron-down");
-			onExpand?.();
-		} else {
-			fileEl.addClass("ghr-collapsed");
-			setIcon(caret, "chevron-right");
-		}
+		setCollapsed(
+			fileEl,
+			caret,
+			!fileEl.hasClass("ghr-collapsed"),
+			onExpand
+		);
 	});
 }
 

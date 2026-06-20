@@ -5,6 +5,6 @@
 	"minAppVersion": "1.4.0",
 	"description": "Review every commit in your vault's git history with a dark-mode diff view, and track which commits you've reviewed and approved. Review state is stored locally so it never creates new commits.",
 	"author": "Tim Dommett",
-	"authorUrl": "https://github.com/timdommett/obsidian-git-history-reviewer",
+	"authorUrl": "https://github.com/TimDommett",
 	"isDesktopOnly": true
 }

@@ -53,6 +53,7 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 	reviews: Record<string, ReviewRecord> = {};
 	git!: GitService;
 	private saveQueued = false;
+	private saveTimer: number | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadPluginData();
@@ -85,6 +86,14 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 		});
 	}
 
+	onunload(): void {
+		// Flush any pending debounced save so a last-moment tick or approval
+		// isn't lost when the plugin is disabled or reloaded.
+		if (this.saveQueued) {
+			void this.persist();
+		}
+	}
+
 	// ------------------------------------------------------------ data storage
 
 	private async loadPluginData(): Promise<void> {
@@ -98,6 +107,12 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 	}
 
 	private async persist(): Promise<void> {
+		// An immediate write absorbs any pending debounced save.
+		if (this.saveTimer !== null) {
+			window.clearTimeout(this.saveTimer);
+			this.saveTimer = null;
+		}
+		this.saveQueued = false;
 		const data: PluginData = {
 			settings: this.settings,
 			reviews: this.reviews,
@@ -114,7 +129,8 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 	private queueSave(): void {
 		if (this.saveQueued) return;
 		this.saveQueued = true;
-		window.setTimeout(() => {
+		this.saveTimer = window.setTimeout(() => {
+			this.saveTimer = null;
 			this.saveQueued = false;
 			void this.persist();
 		}, 250);
