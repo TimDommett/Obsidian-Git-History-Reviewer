@@ -339,6 +339,12 @@
 	padding: 12px 16px 40px;
 }
 
+/* Empty scroll room below the last file so any file can be slid up under the
+   cursor on collapse, even when the diff is too short to otherwise scroll. */
+.ghr-diff-spacer {
+	min-height: 80vh;
+}
+
 .ghr-loading,
 .ghr-empty {
 	color: var(--text-muted);
