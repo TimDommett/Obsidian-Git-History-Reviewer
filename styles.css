@@ -276,6 +276,21 @@
 	color: var(--color-green, #3fb950);
 }
 
+.ghr-hide-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.ghr-hide-toggle input {
+	cursor: pointer;
+}
+
 .ghr-detail-subject {
 	font-size: var(--font-ui-large);
 	font-weight: 600;
@@ -339,14 +354,14 @@
 	padding: 12px 16px 40px;
 }
 
-/* Empty scroll room below the last file so any file can be slid up under the
-   cursor on collapse, even when the diff is too short to otherwise scroll. */
-.ghr-diff-spacer {
-	min-height: 80vh;
+/* Files hidden by the "hide reviewed" toggle once they've been reviewed. */
+.ghr-file.ghr-file-hidden {
+	display: none;
 }
 
 .ghr-loading,
-.ghr-empty {
+.ghr-empty,
+.ghr-all-hidden {
 	color: var(--text-muted);
 	padding: 16px 0;
 }

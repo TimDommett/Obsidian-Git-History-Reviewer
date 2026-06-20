@@ -19,6 +19,10 @@ left to review.
 - **Per-file review circles** — tick off each changed file as you read it. A
   live `2 / 5 files reviewed` counter shows progress, and when every file is
   ticked the commit is *ready to approve*.
+- **Hide reviewed files** (on by default) — ticking a file drops it from the
+  diff so the next unreviewed file moves up into its place, letting you click
+  straight down a commit. Toggle it off (detail pane or settings) to keep
+  reviewed files visible and just collapsed.
 - **Reviewed & approved checkbox** per commit, plus a record of *when* you
   approved it. Approving a commit fills in all its file circles; un-ticking a
   file on an approved commit drops it back to a partial review.
