@@ -475,9 +475,11 @@ function nearestScroller(el: HTMLElement): HTMLElement | null {
 }
 
 /**
- * After a file collapses, slide the next file's header up to the cursor's
- * y-position so files can be reviewed straight down without moving the mouse.
- * Only ever nudges upward, and no-ops when there is no following file.
+ * After a file collapses, slide the next file so its review circle lands right
+ * under the cursor — letting you click straight down through files without
+ * moving the mouse. Aiming at the circle's centre (not the header top) is what
+ * makes the pointer land on the next checkbox exactly. Only nudges upward, and
+ * no-ops when there is no following file.
  */
 function scrollNextFileToCursor(fileEl: HTMLElement, cursorY: number): void {
 	const next = fileEl.nextElementSibling;
@@ -487,11 +489,16 @@ function scrollNextFileToCursor(fileEl: HTMLElement, cursorY: number): void {
 	) {
 		return;
 	}
-	const nextHeader = next.querySelector<HTMLElement>(".ghr-file-header");
+	// Prefer the review circle; fall back to the header if circles are off.
+	const target =
+		next.querySelector<HTMLElement>(".ghr-file-check") ??
+		next.querySelector<HTMLElement>(".ghr-file-header");
 	const scroller = nearestScroller(fileEl);
-	if (!nextHeader || !scroller) return;
+	if (!target || !scroller) return;
 	// Reading the rect after the collapse reflow reflects the new layout.
-	const delta = nextHeader.getBoundingClientRect().top - cursorY;
+	const rect = target.getBoundingClientRect();
+	const targetCenter = rect.top + rect.height / 2;
+	const delta = targetCenter - cursorY;
 	if (delta > 0) scroller.scrollTop += delta;
 }
 
