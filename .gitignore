@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output (produced by `npm run build`)
+main.js
+*.js.map
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
