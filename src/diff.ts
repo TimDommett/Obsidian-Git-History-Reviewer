@@ -44,7 +44,8 @@ function unquote(path: string): string {
 	// git quotes paths with special characters in double quotes.
 	if (path.startsWith('"') && path.endsWith('"')) {
 		try {
-			return JSON.parse(path);
+			const parsed: unknown = JSON.parse(path);
+			return typeof parsed === "string" ? parsed : path.slice(1, -1);
 		} catch {
 			return path.slice(1, -1);
 		}
@@ -269,7 +270,7 @@ export function paintFileCheck(check: HTMLElement, reviewed: boolean): void {
 	check.setAttr("aria-checked", String(reviewed));
 	check.empty();
 	if (reviewed) setIcon(check, "check");
-	const fileEl = check.closest(".ghr-file") as HTMLElement | null;
+	const fileEl = check.closest<HTMLElement>(".ghr-file");
 	fileEl?.toggleClass("ghr-file-reviewed", reviewed);
 }
 

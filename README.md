@@ -117,16 +117,15 @@ Symlink (or clone) this repo into your vault's plugin folder and run
 
 The tag (e.g. `1.0.1`, no `v` prefix) triggers
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs
-`npm ci && npm run build` and opens a **draft** GitHub release with `main.js`,
+`npm ci && npm run build` and **publishes** a GitHub release with `main.js`,
 `manifest.json`, and `styles.css` attached — exactly what the Obsidian Community
-Plugins directory expects. Review the draft and click **Publish**.
-
-3. Publish the draft release on GitHub.
+Plugins directory expects.
 
 > The workflow follows the official
 > [obsidian-sample-plugin](https://github.com/obsidianmd/obsidian-sample-plugin)
 > conventions (committed `package-lock.json` + `npm ci` for reproducible builds,
-> build-provenance attestation, draft release).
+> build-provenance attestation). It publishes a full, non-draft release, as
+> Obsidian's submission flow requires.
 
 To list the plugin in the directory, submit a PR adding it to
 [`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases)
