@@ -272,11 +272,14 @@ export class GitService {
 	async firstRemote(): Promise<string | null> {
 		const res = await this.runRaw(["remote"]);
 		if (res.code !== 0) return null;
-		const first = res.stdout
+		const remotes = res.stdout
 			.split("\n")
 			.map((s) => s.trim())
-			.filter(Boolean)[0];
-		return first ?? null;
+			.filter(Boolean);
+		if (remotes.length === 0) return null;
+		// Prefer "origin" (the PR/canonical remote) over an alphabetically
+		// earlier one like "fork".
+		return remotes.includes("origin") ? "origin" : remotes[0];
 	}
 
 	/**
@@ -349,10 +352,13 @@ export class GitService {
 		const openNumbers = await this.openPullNumbers(remote);
 		const open: PullRequestRef[] = [];
 		for (const pr of all) {
-			// Drop closed PRs (no `…/merge` ref). The size guard keeps the old
-			// behaviour if merge refs aren't available at all.
-			if (openNumbers.size > 0 && !openNumbers.has(pr.number)) continue;
-			// Drop already-merged PRs (head is contained in the base branch).
+			// Only list open & cleanly-mergeable PRs — those keep a `…/merge`
+			// ref. Closed PRs (and ones that currently conflict with the base)
+			// have no merge ref and are dropped, so we never offer to merge a
+			// PR that's actually closed. GitHub is the only remote that exposes
+			// pull refs, so an empty set genuinely means "nothing mergeable".
+			if (!openNumbers.has(pr.number)) continue;
+			// Belt-and-braces: also drop anything already merged into base.
 			if (await this.isAncestor(pr.head, base)) continue;
 			open.push(pr);
 		}
@@ -389,9 +395,11 @@ export class GitService {
 		]);
 	}
 
-	/** Aborts an in-progress merge, restoring the pre-merge state. */
-	async abortMerge(): Promise<void> {
-		await this.runRaw(["merge", "--abort"]);
+	/** Aborts an in-progress merge. Returns true if the abort succeeded (so the
+	 * caller doesn't claim the tree was restored when it wasn't). */
+	async abortMerge(): Promise<boolean> {
+		const res = await this.runRaw(["merge", "--abort"]);
+		return res.code === 0;
 	}
 
 	/** Pushes `branch` to `remote`. */

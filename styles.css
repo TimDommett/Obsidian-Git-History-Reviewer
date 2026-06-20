@@ -286,10 +286,9 @@
 .ghr-detail-head {
 	padding: 16px 20px 12px;
 	border-bottom: 1px solid var(--background-modifier-border);
-	position: sticky;
-	top: 0;
 	background: var(--background-primary);
-	z-index: 2;
+	/* Positioning is governed by `.ghr-detail-split .ghr-detail-head` (static,
+	   fixed flex item); both views are split, so no sticky here. */
 }
 
 .ghr-detail-top {
@@ -553,6 +552,8 @@
 .ghr-file-body {
 	overflow-x: auto;
 	background: var(--background-primary);
+	/* Round the bottom corners to match the card (which no longer clips). */
+	border-radius: 0 0 7px 7px;
 }
 
 .ghr-diff-table {

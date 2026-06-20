@@ -34,6 +34,7 @@ export class PrPanel {
 	private progressEl: HTMLElement | null = null;
 	private activeFiles: DiffFile[] = [];
 	private busy = false;
+	private mergeDialogOpen = false;
 
 	constructor(
 		private plugin: GitHistoryReviewerPlugin,
@@ -175,11 +176,11 @@ export class PrPanel {
 			cls: "ghr-merge-btn mod-cta",
 			text: "Merge & push",
 		});
-		mergeBtn.addEventListener("click", () => this.confirmMerge(pr));
+		mergeBtn.addEventListener("click", () => void this.confirmMerge(pr));
 
 		topRow.createSpan({
 			cls: "ghr-reviewed-at",
-			text: this.base ? `into ${this.base}` : "",
+			text: this.base ? `into current branch ${this.base}` : "",
 		});
 
 		// Live "N / M files reviewed" — these ticks are local-only and never
@@ -306,18 +307,48 @@ export class PrPanel {
 
 	// ------------------------------------------------------------------- merge
 
-	private confirmMerge(pr: PullRequestRef): void {
-		if (this.busy) return;
-		new MergeConfirmModal(this.plugin.app, pr, this.base ?? "?", () =>
-			void this.doMerge(pr)
+	private async confirmMerge(pr: PullRequestRef): Promise<void> {
+		if (this.busy || this.mergeDialogOpen) return;
+		this.mergeDialogOpen = true;
+		// Use the live current branch (not the value captured at list-load) so
+		// the dialog names the branch the merge will actually land on.
+		const base = await this.plugin.git.currentBranch();
+		if (!base) {
+			this.mergeDialogOpen = false;
+			new Notice(
+				"Detached HEAD — check out a branch to merge the PR into."
+			);
+			return;
+		}
+		new MergeConfirmModal(
+			this.plugin.app,
+			pr,
+			base,
+			() => void this.doMerge(pr, base),
+			() => {
+				this.mergeDialogOpen = false;
+			}
 		).open();
 	}
 
-	private async doMerge(pr: PullRequestRef): Promise<void> {
+	private async doMerge(
+		pr: PullRequestRef,
+		expectedBase: string
+	): Promise<void> {
 		const git = this.plugin.git;
-		if (this.busy || !this.remote || !this.base) return;
+		if (this.busy || !this.remote) return;
 		this.busy = true;
 		try {
+			// `git merge` lands on whatever HEAD is right now, so re-verify the
+			// branch hasn't moved since the dialog — and push that same branch.
+			const base = await git.currentBranch();
+			if (!base || base !== expectedBase) {
+				new Notice(
+					"Your checked-out branch changed since you confirmed — nothing was merged. Reload and try again."
+				);
+				return;
+			}
+
 			if (!(await git.isWorkingTreeClean())) {
 				new Notice(
 					"Working tree isn't clean — commit or stash your changes before merging a PR."
@@ -328,30 +359,36 @@ export class PrPanel {
 			try {
 				await git.mergePull(pr.number, pr.head);
 			} catch (err) {
-				await git.abortMerge();
+				const aborted = await git.abortMerge();
 				const message =
 					err instanceof GitError ? err.message : String(err);
 				new Notice(
-					`Merge failed (conflicts?) and was aborted.\n${message}`
+					aborted
+						? `Merge failed (conflicts?) and was aborted — your branch is unchanged.\n${message}`
+						: `Merge failed and could NOT be auto-aborted — your repo may be mid-merge. Run \`git merge --abort\` manually.\n${message}`
 				);
 				return;
 			}
 
 			try {
-				await git.push(this.remote, this.base);
+				await git.push(this.remote, base);
 			} catch (err) {
 				const message =
 					err instanceof GitError ? err.message : String(err);
 				new Notice(
-					`Merged PR #${pr.number} locally, but the push failed: ${message}\nPush manually to close it on GitHub.`
+					`Merged PR #${pr.number} into ${base} locally, but the push failed: ${message}\nPush manually to close it on GitHub.`
 				);
 				await this.reload();
 				return;
 			}
 
 			new Notice(
-				`Merged PR #${pr.number} into ${this.base} and pushed — it will close on GitHub.`
+				`Merged PR #${pr.number} into ${base} and pushed — it will close on GitHub.`
 			);
+			// The PR's per-file ticks are done with; drop them and refresh the
+			// commit history so the new merge commit appears.
+			await this.plugin.removeReview(this.prKey(pr));
+			for (const v of this.plugin.getViews()) void v.reload();
 			await this.reload();
 		} finally {
 			this.busy = false;
@@ -365,7 +402,8 @@ class MergeConfirmModal extends Modal {
 		app: App,
 		private pr: PullRequestRef,
 		private base: string,
-		private onConfirm: () => void
+		private onConfirm: () => void,
+		private onDismiss: () => void
 	) {
 		super(app);
 	}
@@ -380,9 +418,12 @@ class MergeConfirmModal extends Modal {
 		contentEl.createEl("p", {
 			cls: "ghr-date-intro",
 			text:
-				`This merges the PR into "${this.base}" with a merge commit and ` +
-				`pushes — which closes the PR on GitHub. Your working tree must ` +
-				`be clean; on conflicts the merge is aborted and nothing is pushed.`,
+				`This merges the PR into your CURRENT branch "${this.base}" with a ` +
+				`merge commit and pushes it — which closes the PR on GitHub. Note ` +
+				`that's not necessarily the branch the PR targets on GitHub, so ` +
+				`make sure "${this.base}" is the branch you intend. Your working ` +
+				`tree must be clean; on conflicts the merge is aborted and nothing ` +
+				`is pushed.`,
 		});
 
 		const buttons = contentEl.createDiv({ cls: "ghr-date-buttons" });
@@ -401,5 +442,6 @@ class MergeConfirmModal extends Modal {
 
 	onClose(): void {
 		this.contentEl.empty();
+		this.onDismiss();
 	}
 }

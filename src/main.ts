@@ -243,6 +243,15 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 		return changed;
 	}
 
+	/** Deletes a review record outright. Used to clean up a PR's per-file
+	 * ticks once it's been merged. */
+	async removeReview(hash: string): Promise<void> {
+		if (this.reviews[hash]) {
+			delete this.reviews[hash];
+			await this.persist();
+		}
+	}
+
 	private ensureRecord(hash: string): ReviewRecord {
 		let rec = this.reviews[hash];
 		if (!rec) {
