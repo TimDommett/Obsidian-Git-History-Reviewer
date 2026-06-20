@@ -391,6 +391,10 @@ export function renderDiff(
 			);
 		}
 	}
+
+	// Bottom scroll room so the last files can still slide up under the cursor
+	// on collapse — without it, short diffs can't scroll far enough (or at all).
+	container.createDiv({ cls: "ghr-diff-spacer" });
 }
 
 function wireFileCheck(
