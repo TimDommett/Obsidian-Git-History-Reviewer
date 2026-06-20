@@ -89,6 +89,8 @@ export class GitHistoryView extends ItemView {
 	private approveCheckEl: HTMLInputElement | null = null;
 	private approveStatusEl: HTMLElement | null = null;
 	private progressEl: HTMLElement | null = null;
+	private hideCheckEl: HTMLInputElement | null = null;
+	private diffWrapEl: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: GitHistoryReviewerPlugin) {
 		super(leaf);
@@ -225,6 +227,8 @@ export class GitHistoryView extends ItemView {
 		this.approveCheckEl = null;
 		this.progressEl = null;
 		this.approveStatusEl = null;
+		this.hideCheckEl = null;
+		this.diffWrapEl = null;
 		this.renderDetailPlaceholder("Select a commit to review its changes.");
 
 		const git = this.plugin.git;
@@ -438,6 +442,27 @@ export class GitHistoryView extends ItemView {
 		this.approveStatusEl = topRow.createSpan({ cls: "ghr-reviewed-at" });
 		this.syncApproveStatus(commit);
 
+		// Quick toggle: hide files as they're reviewed (mirrors the setting).
+		const hideWrap = topRow.createEl("label", { cls: "ghr-hide-toggle" });
+		const hideCheck = hideWrap.createEl("input", {
+			attr: { type: "checkbox" },
+		});
+		hideCheck.checked = this.plugin.settings.hideReviewedFiles;
+		hideWrap.createSpan({ text: "Hide reviewed" });
+		this.hideCheckEl = hideCheck;
+		hideCheck.addEventListener("change", () => {
+			this.plugin.settings.hideReviewedFiles = hideCheck.checked;
+			void this.plugin.saveSettings();
+			// Re-render so the hidden files and the "all hidden" note are
+			// rebuilt correctly for the new mode.
+			if (this.diffWrapEl) {
+				void this.renderDiffSection(this.diffWrapEl, commit);
+			}
+			for (const v of this.plugin.getViews()) {
+				if (v !== this) v.refreshHideReviewed();
+			}
+		});
+
 		head.createDiv({
 			cls: "ghr-detail-subject",
 			text: commit.subject || "(no commit message)",
@@ -487,6 +512,7 @@ export class GitHistoryView extends ItemView {
 		}
 
 		const diffWrap = this.detailEl.createDiv({ cls: "ghr-diff-wrap" });
+		this.diffWrapEl = diffWrap;
 		await this.renderDiffSection(diffWrap, commit);
 	}
 
@@ -520,7 +546,10 @@ export class GitHistoryView extends ItemView {
 		if (!commit.isMerge) {
 			this.activeFiles = files;
 			this.allReviewKeys = files.map(fileReviewKey);
-			renderDiff(diffTarget, files, { fileReview: hooks });
+			renderDiff(diffTarget, files, {
+				fileReview: hooks,
+				hideReviewed: this.plugin.settings.hideReviewedFiles,
+			});
 			this.updateProgress(commit);
 			return;
 		}
@@ -563,7 +592,10 @@ export class GitHistoryView extends ItemView {
 					"Showing every change this merge introduced (vs its first parent)."
 				);
 				btn.setText("Show merge's own changes");
-				renderDiff(diffTarget, fpFiles, { fileReview: hooks });
+				renderDiff(diffTarget, fpFiles, {
+					fileReview: hooks,
+					hideReviewed: this.plugin.settings.hideReviewedFiles,
+				});
 			} else {
 				this.activeFiles = files;
 				note.setText(
@@ -577,7 +609,11 @@ export class GitHistoryView extends ItemView {
 						: "Full changes unavailable"
 				);
 				if (files.length > 0) {
-					renderDiff(diffTarget, files, { fileReview: hooks });
+					renderDiff(diffTarget, files, {
+						fileReview: hooks,
+						hideReviewed:
+							this.plugin.settings.hideReviewedFiles,
+					});
 				} else {
 					diffTarget.createDiv({
 						cls: "ghr-empty",
@@ -663,16 +699,19 @@ export class GitHistoryView extends ItemView {
 		if (nextHash) await this.select(nextHash, true);
 	}
 
-	/** Repaints every file circle in the detail pane from current state. */
+	/** Repaints every file circle in the detail pane from current state, and
+	 * hides reviewed files when the "hide reviewed" option is on. */
 	private syncFileChecks(commit: CommitMeta): void {
+		const hide = this.plugin.settings.hideReviewedFiles;
 		const checks =
 			this.detailEl.querySelectorAll<HTMLElement>(".ghr-file-check");
 		checks.forEach((check) => {
 			const key = check.dataset.ghrKey ?? "";
-			paintFileCheck(
-				check,
-				this.plugin.isFileReviewed(commit.hash, key)
-			);
+			const reviewed = this.plugin.isFileReviewed(commit.hash, key);
+			paintFileCheck(check, reviewed);
+			check
+				.closest<HTMLElement>(".ghr-file")
+				?.toggleClass("ghr-file-hidden", hide && reviewed);
 		});
 	}
 
@@ -966,6 +1005,20 @@ export class GitHistoryView extends ItemView {
 			}
 		}
 		this.updateCounts();
+	}
+
+	/** Reflects a change to the "hide reviewed files" setting made elsewhere
+	 * (the settings tab, or another open view). */
+	public refreshHideReviewed(): void {
+		if (this.hideCheckEl) {
+			this.hideCheckEl.checked = this.plugin.settings.hideReviewedFiles;
+		}
+		if (this.selectedHash && this.diffWrapEl) {
+			const commit = this.commits.find(
+				(c) => c.hash === this.selectedHash
+			);
+			if (commit) void this.renderDiffSection(this.diffWrapEl, commit);
+		}
 	}
 }
 

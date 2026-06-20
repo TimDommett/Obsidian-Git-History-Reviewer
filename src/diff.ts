@@ -257,6 +257,12 @@ export interface RenderDiffOptions {
 	onRenderFile?: (file: DiffFile) => void;
 	/** When provided, each file header gets a circular "reviewed" checkbox. */
 	fileReview?: FileReviewHooks;
+	/**
+	 * When true, files that are already reviewed are hidden from the diff, so
+	 * ticking a file's circle drops it from view and the next unreviewed file
+	 * rises into its place.
+	 */
+	hideReviewed?: boolean;
 }
 
 /** Stable identity for a file within a commit (matches the displayed name). */
@@ -293,6 +299,7 @@ export function renderDiff(
 		return;
 	}
 
+	let hiddenAtRender = 0;
 	for (const file of files) {
 		const fileEl = container.createDiv({ cls: "ghr-file" });
 
@@ -374,34 +381,39 @@ export function renderDiff(
 		wireCollapse(header, caret, fileEl, renderBody);
 
 		// The review circle sits at the far right of the header. Ticking a file
-		// collapses it (you're done reading it); un-ticking re-opens it. On a
-		// click-collapse we also slide the next file up under the cursor so you
-		// can review straight down without moving the mouse.
+		// collapses it; with "hide reviewed" on it's hidden instead, so the next
+		// unreviewed file rises into its place.
 		if (options.fileReview) {
-			wireFileCheck(
-				header,
-				file,
-				options.fileReview,
-				(reviewed, cursorY) => {
+			if (options.hideReviewed && options.fileReview.isReviewed(file)) {
+				fileEl.addClass("ghr-file-hidden");
+				hiddenAtRender++;
+			}
+			wireFileCheck(header, file, options.fileReview, (reviewed) => {
+				if (reviewed && options.hideReviewed) {
+					fileEl.addClass("ghr-file-hidden");
+				} else {
 					setCollapsed(fileEl, caret, reviewed, renderBody);
-					if (reviewed && cursorY != null) {
-						scrollNextFileToCursor(fileEl, cursorY);
-					}
 				}
-			);
+			});
 		}
 	}
 
-	// Bottom scroll room so the last files can still slide up under the cursor
-	// on collapse — without it, short diffs can't scroll far enough (or at all).
-	container.createDiv({ cls: "ghr-diff-spacer" });
+	// If "hide reviewed" hid every file, say so rather than showing a blank pane.
+	if (options.hideReviewed && hiddenAtRender === files.length) {
+		container.createDiv({
+			cls: "ghr-all-hidden",
+			text: `All ${files.length} file${
+				files.length === 1 ? "" : "s"
+			} reviewed and hidden — turn off "Hide reviewed" to see them.`,
+		});
+	}
 }
 
 function wireFileCheck(
 	header: HTMLElement,
 	file: DiffFile,
 	hooks: FileReviewHooks,
-	onAfterToggle?: (reviewed: boolean, cursorY: number | null) => void
+	onAfterToggle?: (reviewed: boolean) => void
 ): void {
 	const key = fileReviewKey(file);
 	const check = header.createSpan({
@@ -422,10 +434,7 @@ function wireFileCheck(
 		const next = !check.hasClass("is-checked");
 		paintFileCheck(check, next);
 		hooks.onToggle(file, next);
-		// Pointer y-position (null for keyboard) so the next file can slide up
-		// under the cursor on collapse.
-		const cursorY = e instanceof MouseEvent ? e.clientY : null;
-		onAfterToggle?.(next, cursorY);
+		onAfterToggle?.(next);
 	};
 	check.addEventListener("click", toggle);
 	check.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -458,52 +467,14 @@ function wireCollapse(
 	fileEl: HTMLElement,
 	onExpand?: () => void
 ): void {
-	header.addEventListener("click", (e) => {
-		const willCollapse = !fileEl.hasClass("ghr-collapsed");
-		setCollapsed(fileEl, caret, willCollapse, onExpand);
-		// On collapse, bring the next file up under the cursor so you can keep
-		// clicking through files without moving the mouse.
-		if (willCollapse) scrollNextFileToCursor(fileEl, e.clientY);
+	header.addEventListener("click", () => {
+		setCollapsed(
+			fileEl,
+			caret,
+			!fileEl.hasClass("ghr-collapsed"),
+			onExpand
+		);
 	});
-}
-
-/** Nearest scrollable ancestor (the detail pane), or null. */
-function nearestScroller(el: HTMLElement): HTMLElement | null {
-	let parent = el.parentElement;
-	while (parent) {
-		const overflowY = window.getComputedStyle(parent).overflowY;
-		if (overflowY === "auto" || overflowY === "scroll") return parent;
-		parent = parent.parentElement;
-	}
-	return null;
-}
-
-/**
- * After a file collapses, slide the next file so its review circle lands right
- * under the cursor — letting you click straight down through files without
- * moving the mouse. Aiming at the circle's centre (not the header top) is what
- * makes the pointer land on the next checkbox exactly. Only nudges upward, and
- * no-ops when there is no following file.
- */
-function scrollNextFileToCursor(fileEl: HTMLElement, cursorY: number): void {
-	const next = fileEl.nextElementSibling;
-	if (
-		!(next instanceof HTMLElement) ||
-		!next.classList.contains("ghr-file")
-	) {
-		return;
-	}
-	// Prefer the review circle; fall back to the header if circles are off.
-	const target =
-		next.querySelector<HTMLElement>(".ghr-file-check") ??
-		next.querySelector<HTMLElement>(".ghr-file-header");
-	const scroller = nearestScroller(fileEl);
-	if (!target || !scroller) return;
-	// Reading the rect after the collapse reflow reflects the new layout.
-	const rect = target.getBoundingClientRect();
-	const targetCenter = rect.top + rect.height / 2;
-	const delta = targetCenter - cursorY;
-	if (delta > 0) scroller.scrollTop += delta;
 }
 
 function renderFileBody(body: HTMLElement, file: DiffFile): void {

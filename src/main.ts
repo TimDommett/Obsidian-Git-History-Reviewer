@@ -32,6 +32,8 @@ interface GitHistoryReviewerSettings {
 	autoManageGitignore: boolean;
 	/** Auto-mark a commit "approved" once every one of its files is ticked. */
 	autoApproveAllFiles: boolean;
+	/** Hide a file from the diff once it's been reviewed, so the next one rises up. */
+	hideReviewedFiles: boolean;
 }
 
 interface PluginData {
@@ -46,6 +48,7 @@ const DEFAULT_SETTINGS: GitHistoryReviewerSettings = {
 	gitPath: "git",
 	autoManageGitignore: true,
 	autoApproveAllFiles: true,
+	hideReviewedFiles: true,
 };
 
 const GITIGNORE_BANNER =
@@ -379,6 +382,23 @@ class GitHistoryReviewerSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.autoApproveAllFiles = value;
 						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Hide reviewed files")
+			.setDesc(
+				"Once you tick a file off in a commit's diff, hide it so the next unreviewed file moves up under your cursor. Turn off to keep reviewed files visible (collapsed)."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.hideReviewedFiles)
+					.onChange(async (value) => {
+						this.plugin.settings.hideReviewedFiles = value;
+						await this.plugin.saveSettings();
+						for (const v of this.plugin.getViews()) {
+							v.refreshHideReviewed();
+						}
 					})
 			);
 
