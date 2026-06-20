@@ -1,9 +1,10 @@
 name: Release Obsidian plugin
 
-# Mirrors the official obsidian-sample-plugin release workflow. Pushing a
+# Based on the official obsidian-sample-plugin release workflow. Pushing a
 # version tag (e.g. 1.0.1 — no "v" prefix, per the Obsidian guidelines) builds
-# the plugin and opens a DRAFT GitHub release with main.js, manifest.json and
-# styles.css attached. Review the draft, then publish it.
+# the plugin and publishes a GitHub release with main.js, manifest.json and
+# styles.css attached. Obsidian's submission flow requires a *published*
+# (non-draft) release, so this creates one directly.
 on:
     push:
         tags:
@@ -50,5 +51,5 @@ jobs:
 
                   gh release create "$tag" \
                     --title="$tag" \
-                    --draft \
+                    --generate-notes \
                     main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}

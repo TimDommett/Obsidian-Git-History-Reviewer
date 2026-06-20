@@ -121,8 +121,8 @@ export class GitService {
 					}
 					resolve({
 						code,
-						stdout: (stdout as string) ?? "",
-						stderr: (stderr as string) ?? "",
+						stdout: stdout ?? "",
+						stderr: stderr ?? "",
 					});
 				}
 			);

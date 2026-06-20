@@ -72,8 +72,8 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: "open-git-history-reviewer",
-			name: "Open Git History Reviewer",
+			id: "open",
+			name: "Open",
 			callback: () => void this.activateView(),
 		});
 
@@ -324,7 +324,7 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(VIEW_TYPE_GIT_HISTORY);
 		if (existing.length > 0) {
-			await workspace.revealLeaf(existing[0]);
+			workspace.revealLeaf(existing[0]);
 			return;
 		}
 		const leaf = workspace.getLeaf("tab");
@@ -332,7 +332,7 @@ export default class GitHistoryReviewerPlugin extends Plugin {
 			type: VIEW_TYPE_GIT_HISTORY,
 			active: true,
 		});
-		await workspace.revealLeaf(leaf);
+		workspace.revealLeaf(leaf);
 	}
 
 	getViews(): GitHistoryView[] {

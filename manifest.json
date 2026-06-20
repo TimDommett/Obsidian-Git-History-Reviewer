@@ -1,7 +1,7 @@
 {
 	"id": "git-history-reviewer",
 	"name": "Git History Reviewer",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"minAppVersion": "1.4.0",
 	"description": "Review every commit in your vault's git history with a dark-mode diff view, and track which commits you've reviewed and approved. Review state is stored locally so it never creates new commits.",
 	"author": "Tim Dommett",

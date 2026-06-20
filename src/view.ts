@@ -337,7 +337,7 @@ export class GitHistoryView extends ItemView {
 		const check = row.createEl("input", {
 			cls: "ghr-row-check",
 			attr: { type: "checkbox", "aria-label": "Mark reviewed & approved" },
-		}) as HTMLInputElement;
+		});
 		check.checked = approved;
 		check.addEventListener("click", (e) => e.stopPropagation());
 		check.addEventListener("change", () => {
@@ -420,7 +420,7 @@ export class GitHistoryView extends ItemView {
 		});
 		const approveCheck = approveWrap.createEl("input", {
 			attr: { type: "checkbox" },
-		}) as HTMLInputElement;
+		});
 		approveCheck.checked = this.plugin.isApproved(commit.hash);
 		approveCheck.addEventListener("change", () => {
 			void this.toggleApprove(commit, approveCheck.checked);
@@ -997,7 +997,7 @@ class ApproveBeforeDateModal extends Modal {
 		});
 		const input = controls.createEl("input", {
 			attr: { type: "date", id: "ghr-date-input" },
-		}) as HTMLInputElement;
+		});
 		input.value = this.defaultDate();
 
 		const count = contentEl.createDiv({ cls: "ghr-date-count" });
