@@ -45,6 +45,14 @@
 	flex: 1 1 auto;
 }
 
+.ghr-commit-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
 .ghr-search {
 	flex: 1 1 220px;
 	max-width: 360px;
@@ -57,6 +65,10 @@
 	justify-content: center;
 	padding: 4px 6px;
 	cursor: pointer;
+}
+
+.ghr-icon-btn.ghr-mode-active {
+	color: var(--text-accent);
 }
 
 .ghr-count {
@@ -111,6 +123,19 @@
 	display: flex;
 	flex: 1 1 auto;
 	min-height: 0;
+}
+
+/* A "mode" fills the body with its own list + detail; only one is shown at a
+   time (commits vs pull requests). */
+.ghr-mode {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 0;
+}
+
+.ghr-hidden {
+	display: none !important;
 }
 
 .ghr-list-wrap {
@@ -238,13 +263,32 @@
 	background: var(--background-primary);
 }
 
+/* Split detail: a fixed metadata head plus an inner scroll area for the diff,
+   so each file's header stays pinned at the top until you scroll past its file
+   (never tucking behind the head). Used by the pull-request view. */
+.ghr-detail.ghr-detail-split {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.ghr-detail-split .ghr-detail-head {
+	position: static;
+	flex: 0 0 auto;
+}
+
+.ghr-diff-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+}
+
 .ghr-detail-head {
 	padding: 16px 20px 12px;
 	border-bottom: 1px solid var(--background-modifier-border);
-	position: sticky;
-	top: 0;
 	background: var(--background-primary);
-	z-index: 2;
+	/* Positioning is governed by `.ghr-detail-split .ghr-detail-head` (static,
+	   fixed flex item); both views are split, so no sticky here. */
 }
 
 .ghr-detail-top {
@@ -308,6 +352,9 @@
 	color: var(--text-muted);
 	white-space: pre-wrap;
 	overflow-x: auto;
+	/* Keep a long message from dominating the now-fixed detail head. */
+	max-height: 160px;
+	overflow-y: auto;
 }
 
 .ghr-detail-meta {
@@ -403,7 +450,8 @@
 	margin-bottom: 16px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
-	overflow: hidden;
+	/* No `overflow: hidden` here: it would make the file card the sticky
+	   container and stop the header pinning to the scroll area. */
 	background: var(--background-primary);
 }
 
@@ -418,8 +466,14 @@
 	position: sticky;
 	top: 0;
 	z-index: 1;
+	/* Round the top corners to match the card now that it isn't clipped. */
+	border-radius: 7px 7px 0 0;
 	/* Keep a tabbed-to file circle's focus ring clear of the sticky detail head. */
 	scroll-margin-top: 56px;
+}
+
+.ghr-file.ghr-collapsed .ghr-file-header {
+	border-radius: 7px;
 }
 
 .ghr-file-header:hover {
@@ -498,6 +552,8 @@
 .ghr-file-body {
 	overflow-x: auto;
 	background: var(--background-primary);
+	/* Round the bottom corners to match the card (which no longer clips). */
+	border-radius: 0 0 7px 7px;
 }
 
 .ghr-diff-table {

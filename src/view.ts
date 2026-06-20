@@ -9,6 +9,7 @@ import {
 	parseDiff,
 	renderDiff,
 } from "./diff";
+import { PrPanel } from "./prview";
 
 export const VIEW_TYPE_GIT_HISTORY = "git-history-reviewer-view";
 
@@ -92,6 +93,14 @@ export class GitHistoryView extends ItemView {
 	private hideCheckEl: HTMLInputElement | null = null;
 	private diffWrapEl: HTMLElement | null = null;
 
+	// Commits ⇄ pull-requests mode.
+	private mode: "commits" | "prs" = "commits";
+	private prPanel: PrPanel | null = null;
+	private commitControlsEl!: HTMLElement;
+	private commitModeEl!: HTMLElement;
+	private prModeEl!: HTMLElement;
+	private modeBtnEl!: HTMLButtonElement;
+
 	constructor(leaf: WorkspaceLeaf, private plugin: GitHistoryReviewerPlugin) {
 		super(leaf);
 		this.filter = plugin.settings.defaultFilter;
@@ -134,7 +143,13 @@ export class GitHistoryView extends ItemView {
 
 		const controls = bar.createDiv({ cls: "ghr-controls" });
 
-		this.searchInputEl = controls.createEl("input", {
+		// Commit-mode-only controls — hidden while in pull-request mode.
+		const commitControls = controls.createDiv({
+			cls: "ghr-commit-controls",
+		});
+		this.commitControlsEl = commitControls;
+
+		this.searchInputEl = commitControls.createEl("input", {
 			cls: "ghr-search",
 			attr: { type: "search", placeholder: "Search message / hash / author…" },
 		});
@@ -143,7 +158,7 @@ export class GitHistoryView extends ItemView {
 			this.applyFilter();
 		});
 
-		this.filterSelectEl = controls.createEl("select", {
+		this.filterSelectEl = commitControls.createEl("select", {
 			cls: "ghr-filter",
 		});
 		const options: [HistoryFilter, string][] = [
@@ -163,7 +178,7 @@ export class GitHistoryView extends ItemView {
 			this.applyFilter();
 		});
 
-		const approveBefore = controls.createEl("button", {
+		const approveBefore = commitControls.createEl("button", {
 			cls: "ghr-icon-btn",
 			attr: { "aria-label": "Approve all commits up to a date…" },
 		});
@@ -172,29 +187,86 @@ export class GitHistoryView extends ItemView {
 			this.openApproveBeforeDate()
 		);
 
+		// Mode toggle (commits ⇄ pull requests), next to refresh.
+		this.modeBtnEl = controls.createEl("button", { cls: "ghr-icon-btn" });
+		this.modeBtnEl.addEventListener("click", () =>
+			this.setMode(this.mode === "commits" ? "prs" : "commits")
+		);
+
 		const refresh = controls.createEl("button", {
 			cls: "ghr-icon-btn",
-			attr: { "aria-label": "Reload history" },
+			attr: { "aria-label": "Reload" },
 		});
 		setIcon(refresh, "refresh-cw");
-		refresh.addEventListener("click", () => void this.reload());
+		refresh.addEventListener("click", () => this.refreshActive());
 
 		this.ignorePillEl = bar.createDiv({ cls: "ghr-pill" });
 		this.ignorePillEl.addEventListener("click", () => void this.onPillClick());
 
 		this.countEl = bar.createDiv({ cls: "ghr-count" });
+
+		this.updateModeButton();
+	}
+
+	private updateModeButton(): void {
+		this.modeBtnEl.empty();
+		if (this.mode === "commits") {
+			setIcon(this.modeBtnEl, "git-pull-request");
+			this.modeBtnEl.setAttr(
+				"aria-label",
+				"Show incoming pull requests"
+			);
+		} else {
+			setIcon(this.modeBtnEl, "history");
+			this.modeBtnEl.setAttr("aria-label", "Show commit history");
+		}
+		this.modeBtnEl.toggleClass("ghr-mode-active", this.mode === "prs");
+	}
+
+	private refreshActive(): void {
+		if (this.mode === "prs") void this.prPanel?.reload();
+		else void this.reload();
+	}
+
+	private setMode(mode: "commits" | "prs"): void {
+		if (this.mode === mode) return;
+		this.mode = mode;
+		const prs = mode === "prs";
+		this.commitModeEl.toggleClass("ghr-hidden", prs);
+		this.prModeEl.toggleClass("ghr-hidden", !prs);
+		this.commitControlsEl.toggleClass("ghr-hidden", prs);
+		this.ignorePillEl.toggleClass("ghr-hidden", prs);
+		this.countEl.toggleClass("ghr-hidden", prs);
+		this.updateModeButton();
+		if (prs && !this.prPanel) {
+			this.prPanel = new PrPanel(this.plugin, this.prModeEl);
+			this.prPanel.mount();
+			void this.prPanel.reload();
+		}
 	}
 
 	private buildBody(): void {
 		const body = this.contentEl.createDiv({ cls: "ghr-body" });
 
-		const listWrap = body.createDiv({ cls: "ghr-list-wrap" });
+		// Commit mode (default).
+		const commitMode = body.createDiv({ cls: "ghr-mode" });
+		this.commitModeEl = commitMode;
+
+		const listWrap = commitMode.createDiv({ cls: "ghr-list-wrap" });
 		this.listWrapEl = listWrap;
 		this.listEl = listWrap.createDiv({ cls: "ghr-list" });
 		this.sentinelEl = listWrap.createDiv({ cls: "ghr-sentinel" });
 
-		this.detailEl = body.createDiv({ cls: "ghr-detail" });
+		// "split" keeps the commit metadata head fixed and scrolls only the
+		// diff, so a file's header stays pinned at the top until you scroll past
+		// its file (rather than tucking behind the head).
+		this.detailEl = commitMode.createDiv({
+			cls: "ghr-detail ghr-detail-split",
+		});
 		this.renderDetailPlaceholder("Select a commit to review its changes.");
+
+		// Pull-request mode (built lazily on first switch).
+		this.prModeEl = body.createDiv({ cls: "ghr-mode ghr-hidden" });
 
 		this.observer = new IntersectionObserver(
 			(entries) => {
@@ -511,7 +583,8 @@ export class GitHistoryView extends ItemView {
 			});
 		}
 
-		const diffWrap = this.detailEl.createDiv({ cls: "ghr-diff-wrap" });
+		const scroll = this.detailEl.createDiv({ cls: "ghr-diff-scroll" });
+		const diffWrap = scroll.createDiv({ cls: "ghr-diff-wrap" });
 		this.diffWrapEl = diffWrap;
 		await this.renderDiffSection(diffWrap, commit);
 	}
