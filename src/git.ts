@@ -20,7 +20,7 @@ export interface GitRunResult {
 	stderr: string;
 }
 
-/** A pull request discovered locally via its GitHub `refs/pull/<n>/head` ref. */
+/** An open pull request, as reported by the `gh` CLI. */
 export interface PullRequestRef {
 	number: number;
 	/** Head commit SHA of the PR. */
@@ -29,28 +29,8 @@ export interface PullRequestRef {
 	author: string;
 	dateISO: string;
 	subject: string;
-}
-
-/** Pure parser for the `for-each-ref` output used to list pull requests. */
-export function parsePullRefs(out: string): PullRequestRef[] {
-	const prs: PullRequestRef[] = [];
-	for (const line of out.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		const f = trimmed.split(FIELD_SEP);
-		if (f.length < 6) continue;
-		const m = f[0].match(/\/pr\/(\d+)$/);
-		if (!m) continue;
-		prs.push({
-			number: parseInt(m[1], 10),
-			head: f[1],
-			shortHead: f[2],
-			author: f[3],
-			dateISO: f[4],
-			subject: f[5],
-		});
-	}
-	return prs;
+	/** GitHub mergeability: "MERGEABLE" | "CONFLICTING" | "UNKNOWN". */
+	mergeable: string;
 }
 
 // Control characters used to delimit log fields. These never appear in commit
@@ -120,6 +100,15 @@ export class GitService {
 
 	/** Runs git and resolves with stdout/stderr and the exit code (never rejects). */
 	private runRaw(args: string[]): Promise<GitRunResult> {
+		return this.exec(this.gitPath, args);
+	}
+
+	/** Runs the `gh` CLI (used only to list pull requests accurately). */
+	private ghRaw(args: string[]): Promise<GitRunResult> {
+		return this.exec("gh", args);
+	}
+
+	private exec(bin: string, args: string[]): Promise<GitRunResult> {
 		return new Promise((resolve) => {
 			if (!this.cwd) {
 				resolve({
@@ -131,7 +120,7 @@ export class GitService {
 				return;
 			}
 			execFile(
-				this.gitPath,
+				bin,
 				args,
 				{
 					cwd: this.cwd,
@@ -283,87 +272,69 @@ export class GitService {
 	}
 
 	/**
-	 * Fetches every PR's head commit from GitHub into
-	 * `refs/remotes/<remote>/pr/<number>`. Only works against GitHub remotes
-	 * (which expose the pull-request head refs).
+	 * Fetches the PRs' head commits into `refs/remotes/<remote>/pr/<number>` so
+	 * they're available locally for diffing and merging. The open/closed list
+	 * itself comes from `gh` (see listPullRequests); this just makes the commits
+	 * present so everything after the list stays pure local git.
 	 */
 	async fetchPullRefs(remote: string): Promise<void> {
-		// Also fetch the `…/merge` refs: GitHub keeps one only while a PR is
-		// open (and mergeable) and drops it when the PR is closed/merged, so
-		// with `--prune` they become a local signal for "still open".
 		await this.run([
 			"fetch",
 			"--prune",
 			remote,
 			`+refs/pull/*/head:refs/remotes/${remote}/pr/*`,
-			`+refs/pull/*/merge:refs/remotes/${remote}/pr-merge/*`,
 		]);
 	}
 
-	/** Numbers of PRs that still have a `…/merge` ref (i.e. open & mergeable). */
-	private async openPullNumbers(remote: string): Promise<Set<number>> {
-		const res = await this.runRaw([
-			"for-each-ref",
-			"--format=%(refname)",
-			`refs/remotes/${remote}/pr-merge/*`,
-		]);
-		const nums = new Set<number>();
-		if (res.code !== 0) return nums;
-		for (const line of res.stdout.split("\n")) {
-			const m = line.trim().match(/\/pr-merge\/(\d+)$/);
-			if (m) nums.add(parseInt(m[1], 10));
-		}
-		return nums;
-	}
-
-	/** True when `ancestor` is an ancestor of (already contained in) `ref`. */
-	async isAncestor(ancestor: string, ref: string): Promise<boolean> {
-		const res = await this.runRaw([
-			"merge-base",
-			"--is-ancestor",
-			ancestor,
-			ref,
-		]);
+	/** True when the `gh` CLI is installed and runnable. */
+	async isGhAvailable(): Promise<boolean> {
+		const res = await this.ghRaw(["--version"]);
 		return res.code === 0;
 	}
 
 	/**
-	 * Lists locally-known PRs (from previously fetched pr refs) that are not yet
-	 * merged into `base`. Already-merged PRs are filtered out.
+	 * Lists the repo's OPEN pull requests via the GitHub CLI. This is the only
+	 * piece that isn't local git: `gh` is the reliable source of open/closed
+	 * state and mergeability (local refs can't distinguish closed from
+	 * conflicting). Throws a GitError carrying gh's message (e.g. asking you to
+	 * run `gh auth login`) on failure.
 	 */
-	async listOpenPulls(
-		base: string,
-		remote: string
-	): Promise<PullRequestRef[]> {
-		const fmt = [
-			"%(refname)",
-			"%(objectname)",
-			"%(objectname:short)",
-			"%(authorname)",
-			"%(authordate:iso-strict)",
-			"%(contents:subject)",
-		].join(FIELD_SEP);
-		const out = await this.run([
-			"for-each-ref",
-			`--format=${fmt}`,
-			`refs/remotes/${remote}/pr/*`,
+	async listPullRequests(limit = 100): Promise<PullRequestRef[]> {
+		const res = await this.ghRaw([
+			"pr",
+			"list",
+			"--state",
+			"open",
+			"--limit",
+			String(limit),
+			"--json",
+			"number,title,author,headRefOid,createdAt,mergeable",
 		]);
-		const all = parsePullRefs(out);
-		const openNumbers = await this.openPullNumbers(remote);
-		const open: PullRequestRef[] = [];
-		for (const pr of all) {
-			// Only list open & cleanly-mergeable PRs — those keep a `…/merge`
-			// ref. Closed PRs (and ones that currently conflict with the base)
-			// have no merge ref and are dropped, so we never offer to merge a
-			// PR that's actually closed. GitHub is the only remote that exposes
-			// pull refs, so an empty set genuinely means "nothing mergeable".
-			if (!openNumbers.has(pr.number)) continue;
-			// Belt-and-braces: also drop anything already merged into base.
-			if (await this.isAncestor(pr.head, base)) continue;
-			open.push(pr);
+		if (res.code !== 0) {
+			throw new GitError(
+				`gh pr list failed (code ${res.code}): ${res.stderr.trim()}`,
+				res
+			);
 		}
-		open.sort((a, b) => b.number - a.number);
-		return open;
+		const raw = JSON.parse(res.stdout) as Array<{
+			number: number;
+			title: string;
+			author: { login?: string } | null;
+			headRefOid: string;
+			createdAt: string;
+			mergeable: string;
+		}>;
+		return raw
+			.map((p) => ({
+				number: p.number,
+				head: p.headRefOid,
+				shortHead: p.headRefOid.slice(0, 8),
+				author: p.author?.login ?? "",
+				dateISO: p.createdAt,
+				subject: p.title,
+				mergeable: p.mergeable,
+			}))
+			.sort((a, b) => b.number - a.number);
 	}
 
 	/** Diff of what a PR introduces relative to its merge-base with `base`. */
@@ -381,6 +352,27 @@ export class GitService {
 	async isWorkingTreeClean(): Promise<boolean> {
 		const res = await this.runRaw(["status", "--porcelain"]);
 		return res.code === 0 && res.stdout.trim() === "";
+	}
+
+	/** True when a merge/rebase/cherry-pick/revert is already in progress, so we
+	 * never start a PR merge on top of an unfinished operation. */
+	async isMergeInProgress(): Promise<boolean> {
+		for (const ref of [
+			"MERGE_HEAD",
+			"REBASE_HEAD",
+			"CHERRY_PICK_HEAD",
+			"REVERT_HEAD",
+		]) {
+			const res = await this.runRaw(["rev-parse", "-q", "--verify", ref]);
+			if (res.code === 0) return true;
+		}
+		return false;
+	}
+
+	/** Current HEAD commit SHA — captured before a merge as a recovery point. */
+	async headSha(): Promise<string | null> {
+		const res = await this.runRaw(["rev-parse", "HEAD"]);
+		return res.code === 0 ? res.stdout.trim() : null;
 	}
 
 	/** Merges a PR's head into the current branch with a merge commit. Throws
@@ -402,7 +394,45 @@ export class GitService {
 		return res.code === 0;
 	}
 
-	/** Pushes `branch` to `remote`. */
+	/** Paths still in conflict (unmerged in the index). */
+	async conflictedFiles(): Promise<string[]> {
+		const res = await this.runRaw([
+			"diff",
+			"--name-only",
+			"--diff-filter=U",
+		]);
+		if (res.code !== 0) return [];
+		return res.stdout
+			.split("\n")
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}
+
+	/** Stages conflict resolutions. Uses `-u` (tracked files only) so it can
+	 * never sweep unrelated untracked files into the merge commit. */
+	async stageResolved(): Promise<void> {
+		await this.run(["add", "-u"]);
+	}
+
+	/** True when the staged tree still contains leftover conflict markers. */
+	async hasConflictMarkers(): Promise<boolean> {
+		const res = await this.runRaw(["diff", "--cached", "--check"]);
+		return (
+			/conflict marker/i.test(res.stdout) ||
+			/conflict marker/i.test(res.stderr)
+		);
+	}
+
+	/** Completes an in-progress merge using its prepared message (no editor). */
+	async commitMerge(): Promise<void> {
+		await this.run(["commit", "--no-edit"]);
+	}
+
+	/**
+	 * Pushes `branch` to `remote`. Deliberately a plain push with NO force of
+	 * any kind — git rejects a non-fast-forward instead of overwriting, so the
+	 * remote's history and commits can never be lost through this.
+	 */
 	async push(remote: string, branch: string): Promise<void> {
 		await this.run(["push", remote, branch]);
 	}

@@ -229,6 +229,24 @@
 	color: var(--text-muted);
 }
 
+.ghr-conflict-badge {
+	flex: 0 0 auto;
+	font-size: 0.7em;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 1px 5px;
+	border-radius: 4px;
+	color: var(--color-red, #f85149);
+	background: rgba(248, 81, 73, 0.15);
+	white-space: nowrap;
+}
+
+.ghr-conflict-warn {
+	margin: 4px 0 0;
+	color: var(--color-orange, #e3b341);
+	font-size: var(--font-ui-smaller);
+}
+
 .ghr-row-meta {
 	display: flex;
 	gap: 8px;
