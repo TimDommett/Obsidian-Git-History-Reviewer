@@ -88,14 +88,26 @@ export class PrPanel {
 			return;
 		}
 
+		// The list (and only the list) comes from the GitHub CLI, which is the
+		// only reliable way to know which PRs are open and whether they
+		// conflict. Everything after — diffing and merging — stays local git.
+		if (!(await git.isGhAvailable())) {
+			this.renderListMessage(
+				"Listing pull requests needs the GitHub CLI (gh).\n\nInstall it from cli.github.com and run `gh auth login`, then refresh. (Reviewing diffs and merging still happen locally with git.)"
+			);
+			return;
+		}
+
 		this.renderListMessage("Fetching pull requests…");
 		try {
+			// Make the PR head commits available locally (for diff/merge)…
 			await git.fetchPullRefs(this.remote);
-			this.prs = await git.listOpenPulls(this.base, this.remote);
+			// …then list the open ones via gh.
+			this.prs = await git.listPullRequests();
 		} catch (err) {
 			const message = err instanceof GitError ? err.message : String(err);
 			this.renderListMessage(
-				`Could not fetch pull requests. Is the remote on GitHub?\n\n${message}`
+				`Could not list pull requests via gh:\n\n${message}`
 			);
 			return;
 		}
@@ -134,6 +146,12 @@ export class PrPanel {
 				cls: "ghr-merge-badge",
 				text: `#${pr.number}`,
 			});
+			if (pr.mergeable === "CONFLICTING") {
+				subjectLine.createSpan({
+					cls: "ghr-conflict-badge",
+					text: "conflicts",
+				});
+			}
 			subjectLine.createSpan({
 				cls: "ghr-row-subject-text",
 				text: pr.subject || "(no title)",
@@ -182,6 +200,13 @@ export class PrPanel {
 			cls: "ghr-reviewed-at",
 			text: this.base ? `into current branch ${this.base}` : "",
 		});
+
+		if (pr.mergeable === "CONFLICTING") {
+			topRow.createSpan({
+				cls: "ghr-conflict-badge",
+				text: "conflicts with base",
+			});
+		}
 
 		// Live "N / M files reviewed" — these ticks are local-only and never
 		// approve or merge the PR.
@@ -356,6 +381,19 @@ export class PrPanel {
 				return;
 			}
 
+			// Never start a PR merge on top of an unfinished merge/rebase.
+			if (await git.isMergeInProgress()) {
+				new Notice(
+					"A merge or rebase is already in progress in this repo — finish or abort it first. Nothing was changed."
+				);
+				return;
+			}
+
+			// Recovery point: a merge only *adds* a commit, so the pre-merge
+			// HEAD is always reachable (also kept in the reflog) if you ever
+			// want to undo. We surface it so nothing ever feels unrecoverable.
+			const recoveryPoint = await git.headSha();
+
 			try {
 				await git.mergePull(pr.number, pr.head);
 			} catch (err) {
@@ -376,14 +414,20 @@ export class PrPanel {
 				const message =
 					err instanceof GitError ? err.message : String(err);
 				new Notice(
-					`Merged PR #${pr.number} into ${base} locally, but the push failed: ${message}\nPush manually to close it on GitHub.`
+					`Merged PR #${pr.number} into ${base} locally, but the push was not completed: ${message}\nNothing on the remote was overwritten (no force is ever used) — pull/merge the remote changes, then push manually.`
 				);
 				await this.reload();
 				return;
 			}
 
 			new Notice(
-				`Merged PR #${pr.number} into ${base} and pushed — it will close on GitHub.`
+				`Merged PR #${pr.number} into ${base} and pushed — it will close on GitHub.` +
+					(recoveryPoint
+						? `\nNothing was overwritten; pre-merge commit ${recoveryPoint.slice(
+								0,
+								10
+						  )} is still in your reflog if you ever want to undo.`
+						: "")
 			);
 			// The PR's per-file ticks are done with; drop them and refresh the
 			// commit history so the new merge commit appears.
@@ -421,9 +465,16 @@ class MergeConfirmModal extends Modal {
 				`This merges the PR into your CURRENT branch "${this.base}" with a ` +
 				`merge commit and pushes it — which closes the PR on GitHub. Note ` +
 				`that's not necessarily the branch the PR targets on GitHub, so ` +
-				`make sure "${this.base}" is the branch you intend. Your working ` +
-				`tree must be clean; on conflicts the merge is aborted and nothing ` +
-				`is pushed.`,
+				`make sure "${this.base}" is the branch you intend.`,
+		});
+		contentEl.createEl("p", {
+			cls: "ghr-date-intro",
+			text:
+				`Safety: it only adds a merge commit and does a plain push (never a ` +
+				`force-push), so no existing commits or history can be overwritten ` +
+				`or lost. Your working tree must be clean, no other merge/rebase may ` +
+				`be in progress, and on any conflict the merge is aborted and ` +
+				`nothing is pushed.`,
 		});
 
 		const buttons = contentEl.createDiv({ cls: "ghr-date-buttons" });
