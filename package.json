@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-git-history-reviewer",
-	"version": "1.0.5",
+	"version": "1.0.6",
 	"description": "Review every commit in your Obsidian vault's git history with a dark-mode diff view and track which commits you've approved.",
 	"main": "main.js",
 	"scripts": {
