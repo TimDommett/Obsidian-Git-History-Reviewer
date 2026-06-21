@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, TFile } from "obsidian";
 import type GitHistoryReviewerPlugin from "./main";
 import { GitError, PullRequestRef } from "./git";
 import {
@@ -85,6 +85,17 @@ export class PrPanel {
 			this.renderListMessage(
 				"You're in a detached HEAD state — check out a branch to merge into."
 			);
+			return;
+		}
+
+		// If a merge is already in progress, surface the resolve UI instead of
+		// listing PRs, so a half-finished merge is never lost or pushed by
+		// accident (and so another tool can't quietly commit it).
+		if (await git.isMergeInProgress()) {
+			this.renderListMessage(
+				"A merge is in progress — resolve it on the right."
+			);
+			await this.renderResolveMode();
 			return;
 		}
 
@@ -397,13 +408,24 @@ export class PrPanel {
 			try {
 				await git.mergePull(pr.number, pr.head);
 			} catch (err) {
-				const aborted = await git.abortMerge();
 				const message =
 					err instanceof GitError ? err.message : String(err);
+				// If git left a merge in progress, it's conflicts — let the user
+				// resolve them in Obsidian rather than aborting for them.
+				if (await git.isMergeInProgress()) {
+					new Notice(
+						`PR #${pr.number} conflicts with ${base} — resolve the listed files, then complete the merge. Nothing has been pushed.`
+					);
+					await this.renderResolveMode(pr.number);
+					return;
+				}
+				// Otherwise the merge never started; nothing to clean up beyond a
+				// best-effort abort.
+				const aborted = await git.abortMerge();
 				new Notice(
 					aborted
-						? `Merge failed (conflicts?) and was aborted — your branch is unchanged.\n${message}`
-						: `Merge failed and could NOT be auto-aborted — your repo may be mid-merge. Run \`git merge --abort\` manually.\n${message}`
+						? `Merge failed and was aborted — your branch is unchanged.\n${message}`
+						: `Merge failed and could NOT be auto-aborted — run \`git merge --abort\` manually.\n${message}`
 				);
 				return;
 			}
@@ -433,6 +455,159 @@ export class PrPanel {
 			// commit history so the new merge commit appears.
 			await this.plugin.removeReview(this.prKey(pr));
 			for (const v of this.plugin.getViews()) void v.reload();
+			await this.reload();
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	// ------------------------------------------------------- conflict resolve
+
+	/** Shows the conflict-resolution UI for an in-progress merge. */
+	private async renderResolveMode(prNumber?: number): Promise<void> {
+		this.detailEl.empty();
+		this.progressEl = null;
+		this.activeFiles = [];
+
+		const head = this.detailEl.createDiv({ cls: "ghr-detail-head" });
+		head.createDiv({
+			cls: "ghr-detail-subject",
+			text: prNumber
+				? `Resolve conflicts — PR #${prNumber}`
+				: "Resolve merge conflicts",
+		});
+		head.createEl("p", {
+			cls: "ghr-date-intro",
+			text:
+				"Open each file, remove the conflict markers (<<<<<<<, =======, >>>>>>>) so it reads how you want, and save. Then complete the merge to commit & push — or abort to undo everything. Nothing has been pushed yet.",
+		});
+		head.createEl("p", {
+			cls: "ghr-conflict-warn",
+			text:
+				"A merge is in progress — complete or abort it soon, before another tool (e.g. Obsidian Git auto-commit) commits this state.",
+		});
+
+		const actions = head.createDiv({ cls: "ghr-date-buttons" });
+		actions
+			.createEl("button", {
+				cls: "mod-cta",
+				text: "Complete merge & push",
+			})
+			.addEventListener("click", () => void this.completeMerge());
+		actions
+			.createEl("button", { text: "Abort merge" })
+			.addEventListener("click", () => void this.abortResolve());
+		actions
+			.createEl("button", { text: "Re-check" })
+			.addEventListener(
+				"click",
+				() => void this.renderResolveMode(prNumber)
+			);
+
+		const scroll = this.detailEl.createDiv({ cls: "ghr-diff-scroll" });
+		const wrap = scroll.createDiv({ cls: "ghr-diff-wrap" });
+		const files = await this.plugin.git.conflictedFiles();
+		if (files.length === 0) {
+			wrap.createDiv({
+				cls: "ghr-empty",
+				text: 'No conflicted files remain — click "Complete merge & push".',
+			});
+			return;
+		}
+		for (const f of files) {
+			const fileEl = wrap.createDiv({ cls: "ghr-file" });
+			const fhead = fileEl.createDiv({ cls: "ghr-file-header" });
+			fhead.createSpan({
+				cls: "ghr-status ghr-status-deleted",
+				text: "conflict",
+			});
+			fhead.createSpan({ cls: "ghr-file-name", text: f });
+			fhead
+				.createEl("button", { cls: "ghr-merge-btn", text: "Open" })
+				.addEventListener("click", () => this.openVaultFile(f));
+		}
+	}
+
+	private openVaultFile(path: string): void {
+		const file = this.plugin.app.vault.getAbstractFileByPath(path);
+		if (file instanceof TFile) {
+			void this.plugin.app.workspace.getLeaf("tab").openFile(file);
+		} else {
+			new Notice(
+				`Can't open "${path}" from the vault — edit it in your editor, then Re-check.`
+			);
+		}
+	}
+
+	private async completeMerge(): Promise<void> {
+		const git = this.plugin.git;
+		if (this.busy) return;
+		this.busy = true;
+		try {
+			if (!(await git.isMergeInProgress())) {
+				new Notice("No merge is in progress.");
+				await this.reload();
+				return;
+			}
+			await git.stageResolved();
+			if (await git.hasConflictMarkers()) {
+				new Notice(
+					"Some files still contain conflict markers (<<<<<<<). Fix them, then Re-check and complete."
+				);
+				return;
+			}
+			const remaining = await git.conflictedFiles();
+			if (remaining.length > 0) {
+				new Notice(
+					`Still ${remaining.length} unresolved file${
+						remaining.length === 1 ? "" : "s"
+					}: ${remaining.join(", ")}`
+				);
+				return;
+			}
+			try {
+				await git.commitMerge();
+			} catch (err) {
+				const message =
+					err instanceof GitError ? err.message : String(err);
+				new Notice(`Couldn't complete the merge commit:\n${message}`);
+				return;
+			}
+			const base = await git.currentBranch();
+			if (this.remote && base) {
+				try {
+					await git.push(this.remote, base);
+					new Notice(
+						`Conflicts resolved, merge completed and pushed to ${base}. Nothing was overwritten (plain push, no force).`
+					);
+				} catch (err) {
+					const message =
+						err instanceof GitError ? err.message : String(err);
+					new Notice(
+						`Merge committed locally on ${base}, but the push wasn't completed: ${message}\nNothing on the remote was overwritten — push manually.`
+					);
+				}
+			} else {
+				new Notice("Conflicts resolved and merge committed locally.");
+			}
+			for (const v of this.plugin.getViews()) void v.reload();
+			await this.reload();
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	private async abortResolve(): Promise<void> {
+		const git = this.plugin.git;
+		if (this.busy) return;
+		this.busy = true;
+		try {
+			const ok = await git.abortMerge();
+			new Notice(
+				ok
+					? "Merge aborted — your branch is back exactly as it was."
+					: "Couldn't abort automatically — run `git merge --abort` in a terminal."
+			);
 			await this.reload();
 		} finally {
 			this.busy = false;

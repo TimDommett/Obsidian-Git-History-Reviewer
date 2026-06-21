@@ -394,6 +394,40 @@ export class GitService {
 		return res.code === 0;
 	}
 
+	/** Paths still in conflict (unmerged in the index). */
+	async conflictedFiles(): Promise<string[]> {
+		const res = await this.runRaw([
+			"diff",
+			"--name-only",
+			"--diff-filter=U",
+		]);
+		if (res.code !== 0) return [];
+		return res.stdout
+			.split("\n")
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}
+
+	/** Stages conflict resolutions. Uses `-u` (tracked files only) so it can
+	 * never sweep unrelated untracked files into the merge commit. */
+	async stageResolved(): Promise<void> {
+		await this.run(["add", "-u"]);
+	}
+
+	/** True when the staged tree still contains leftover conflict markers. */
+	async hasConflictMarkers(): Promise<boolean> {
+		const res = await this.runRaw(["diff", "--cached", "--check"]);
+		return (
+			/conflict marker/i.test(res.stdout) ||
+			/conflict marker/i.test(res.stderr)
+		);
+	}
+
+	/** Completes an in-progress merge using its prepared message (no editor). */
+	async commitMerge(): Promise<void> {
+		await this.run(["commit", "--no-edit"]);
+	}
+
 	/**
 	 * Pushes `branch` to `remote`. Deliberately a plain push with NO force of
 	 * any kind — git rejects a non-fast-forward instead of overwriting, so the

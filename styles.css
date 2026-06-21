@@ -241,6 +241,12 @@
 	white-space: nowrap;
 }
 
+.ghr-conflict-warn {
+	margin: 4px 0 0;
+	color: var(--color-orange, #e3b341);
+	font-size: var(--font-ui-smaller);
+}
+
 .ghr-row-meta {
 	display: flex;
 	gap: 8px;
